@@ -184,56 +184,120 @@
 
 ---
 
-## 8. Web UI
+## 8. Web UI — MUI App Shell
 
-- [ ] **Dashboard loads at `http://127.0.0.1:8899`**
-  Expected: page title is "Hermes Hub", runtime banner is visible
+- [ ] **App Shell loads with Sidebar and Topbar at `http://127.0.0.1:8899`**
+  Expected: Left sidebar visible with 7 nav items (Dashboard/Profiles/Gateway/Logs/Health/Templates/Settings), top bar shows "Hermes Hub v0.1.0"
 
-- [ ] **Runtime banner shows CLI status and HERMES_HOME**
-  Expected: shows "CLI: found" or "CLI: missing", and the home path
+- [ ] **Sidebar navigation — Profiles is highlighted by default**
+  Expected: Profiles menu item has selected/highlighted state
 
-- [ ] **Profile list table shows all profiles**
-  Expected: one row per profile, columns: Name, HERMES_HOME, config.yaml, SOUL.md, Last Updated, Status
+- [ ] **Sidebar navigation — non-Profiles items show placeholder pages**
+  Expected: Clicking Gateway/Logs/Health/Templates/Settings shows a centered "coming soon" placeholder page
 
-- [ ] **Click profile row opens detail page**
-  Expected: shows "Profile Detail" heading, config summary (model/provider), SOUL status
+- [ ] **App Shell uses dark theme consistently**
+  Expected: Dark background (`#0d1117`), paper cards (`#161b22`), no white/light flash on navigation
 
-- [ ] **"Open Config" button navigates to config editor**
-  Expected: textarea pre-filled with YAML content, file path and status bar visible
-
-- [ ] **"Validate YAML" shows valid result**
-  Expected: green text "YAML Validation: Valid YAML"
-
-- [ ] **"Validate YAML" shows error for invalid content**
-  Expected: red text "YAML Validation: Invalid YAML" with error details
-
-- [ ] **"Save config.yaml" saves and shows backup path**
-  Expected: green text with backup path and timestamp
-
-- [ ] **Security notice is visible in config editor**
-  Expected: text "Security notice: This editor shows the real file content..."
-
-- [ ] **"Back to Detail" returns to detail page**
-  Expected: Profile Detail heading visible again
-
-- [ ] **"Open SOUL" button navigates to SOUL editor**
-  Expected: textarea with SOUL.md content, "Check Content" and "Save SOUL.md" buttons
-
-- [ ] **"Check Content" shows result**
-  Expected: validation feedback
-
-- [ ] **Empty SOUL.md is blocked on save with clear message**
-  Expected: red text "Save blocked: SOUL.md content must not be empty..."
-
-- [ ] **"Back to Profiles" returns to list**
-  Expected: Profiles heading visible, table shown
-
-- [ ] **No console errors (except favicon.ico 404)**
-  Expected: browser dev tools console is clean
+- [ ] **Sidebar shows version info at bottom**
+  Expected: "Hermes Hub v0.1.0" visible at bottom of sidebar
 
 ---
+## 9. Web UI — Profiles Page
 
-## 9. Error Handling
+- [ ] **Profiles Page has header with title, subtitle, and action buttons**
+  Expected: "Profiles" title, "Manage local Hermes Agent Profiles" subtitle, buttons: Rescan (text) → Import (outlined) → New Profile (contained)
+
+- [ ] **Runtime Status Card shows CLI version, HERMES_HOME, and source**
+  Expected: Card with "Runtime" label, CLI chip (green/red), HOME path chip, source chip (outlined), Rescan button
+
+- [ ] **Runtime Status Card — Rescan button works**
+  Expected: Clicking Rescan refreshes the runtime info chips
+
+- [ ] **Summary Cards show counts**
+  Expected: 5 cards — Total Profiles, Ready, Missing SOUL, Runtime Unknown, Last Scan. All display correct values.
+
+- [ ] **Profiles Table has 8 columns**
+  Expected: Name, HERMES_HOME, Config, SOUL, Runtime, Health, Last Updated, Actions
+
+- [ ] **Config status chip shows correct color**
+  Expected: Ready=green, Missing/Unknown=amber, Invalid/Perm Error=red
+
+- [ ] **SOUL status chip shows correct color**
+  Expected: Ready=green, Missing/Empty=amber, Perm Error=red
+
+- [ ] **Runtime status chip shows Unknown for all profiles**
+  Expected: All rows show "Unknown" in grey (default) chip — NOT "Stopped"
+
+- [ ] **Health status chip derived correctly**
+  Expected: Profiles with ready config+soul show Healthy (green). Profiles with missing files show Warning (amber) or Error (red).
+
+- [ ] **Table row click navigates to Profile Detail**
+  Expected: Clicking any row opens the Profile Detail page
+
+- [ ] **Actions column has View and More buttons**
+  Expected: Each row has an OpenInNew icon button and a MoreVert icon button. Both stop event propagation.
+
+- [ ] **Empty state shows helper text and New Profile button**
+  Expected: If no profiles, centered message with "New Profile" button
+
+- [ ] **New Profile button opens Create Profile wizard**
+  Expected: Clicking "New Profile" navigates to the 3-step wizard (Name → Model → SOUL.md)
+
+- [ ] **Import button opens Import page**
+  Expected: Clicking "Import" navigates to import page with directory path input
+
+---
+## 10. Web UI — Profile Detail, Gateway & Logs (MUI-styled)
+
+- [ ] **Profile Detail page preserves all fields**
+  Expected: HERMES_HOME, status, config.yaml details, SOUL.md details, Gateway status all visible
+
+- [ ] **Gateway status chip shows correct color**
+  Expected: Running=green, Stopped=grey, Error=red, Unknown=amber
+
+- [ ] **Gateway Start/Stop/Restart buttons work**
+  Expected: Each button triggers the API call and shows feedback via Alert
+
+- [ ] **Clone button navigates to Clone Profile page**
+  Expected: Clone page shows source profile name and new name input
+
+- [ ] **View Logs button navigates to Log Viewer**
+  Expected: Shows log lines with line count selector and Refresh button
+
+- [ ] **Open Config navigates to Config Editor**
+  Expected: Textarea with YAML content, Validate and Save buttons, security notice
+
+- [ ] **Open SOUL navigates to SOUL Editor**
+  Expected: Textarea with SOUL.md content, Validate and Save buttons
+
+- [ ] **Back button returns to Profiles list**
+  Expected: "Back to Profiles" button navigates to the list page
+
+---
+## 11. Web UI — StatusChip Color Semantics
+
+- [ ] **Config: Ready → green (success)**
+- [ ] **Config: Missing → amber (warning)**
+- [ ] **Config: Invalid → red (error)**
+- [ ] **SOUL: Ready → green (success)**
+- [ ] **SOUL: Missing / Empty → amber (warning)**
+- [ ] **SOUL: Permission Error → red (error)**
+- [ ] **Runtime: Unknown → grey (default)** — MUST NOT show as Stopped or Error
+- [ ] **Health: Healthy → green (success)**
+- [ ] **Health: Warning → amber (warning)**
+- [ ] **Health: Error → red (error)**
+
+---
+## 12. Web UI — No Console Errors
+
+- [ ] **No JavaScript console errors on any page**
+  Expected: browser dev tools console is clean (favicon.ico 404 is acceptable)
+
+- [ ] **No MUI prop warnings in console**
+  Expected: no deprecated prop warnings, no missing key warnings
+
+---
+## 13. Error Handling
 
 - [ ] **Missing config.yaml shows clear message in editor**
   Expected: "config.yaml does not exist..." message
@@ -249,7 +313,7 @@
 
 ---
 
-## 10. Safety Verification (Destructive Tests)
+## 14. Safety Verification (Destructive Tests)
 
 > Perform these on a **test profile**, not on a production one.
 
@@ -275,17 +339,21 @@
 
 | Section | Total Items | Passed | Notes |
 |---|---|---|---|
-| CLI Startup | 5 | | |
-| API — Health | 1 | | |
-| API — Runtime | 3 | | |
-| API — Profile Scan | 3 | | |
-| API — Profile Detail | 2 | | |
-| API — Config Edit | 7 | | |
-| API — SOUL Edit | 6 | | |
-| Web UI | 16 | | |
-| Error Handling | 4 | | |
-| Safety Verification | 4 | | |
-| **Total** | **51** | | |
+| 1. CLI Startup | 5 | | |
+| 2. API — Health | 1 | | |
+| 3. API — Runtime | 3 | | |
+| 4. API — Profile Scan | 3 | | |
+| 5. API — Profile Detail | 2 | | |
+| 6. API — Config Edit | 7 | | |
+| 7. API — SOUL Edit | 6 | | |
+| 8. Web UI — MUI App Shell | 5 | | |
+| 9. Web UI — Profiles Page | 14 | | |
+| 10. Web UI — Detail, Gateway & Logs | 8 | | |
+| 11. Web UI — StatusChip Colors | 10 | | |
+| 12. Web UI — No Console Errors | 2 | | |
+| 13. Error Handling | 4 | | |
+| 14. Safety Verification | 4 | | |
+| **Total** | **74** | | |
 
 ---
 

@@ -4,7 +4,7 @@ Multi-Agent Profile Hub for Hermes — a local visual management center for crea
 
 ## Current Status
 
-Hermes Hub is currently aligned with the **PRD v0.8 Post-MVP roadmap**. The codebase has completed the MVP safe edit loop, the PR9-PR11 hardening pass, P1 Profile creation/cloning/import, and P2 Gateway/logs basics.
+Hermes Hub is currently aligned with the **PRD v0.8 Post-MVP roadmap**. The codebase has completed the MVP safe edit loop (PR1-PR8), the hardening pass (PR9-PR11), P1 Profile creation/cloning/import (PR12-PR14), P2 Gateway/logs basics (PR15-PR17), and the UI Shell & Profiles page refactoring (PR19).
 
 Current implemented scope:
 
@@ -22,6 +22,9 @@ Current implemented scope:
 - Import an existing Profile directory for inspection
 - Check Gateway status and trigger start / stop / restart through the Hermes CLI
 - View recent Profile log lines without real-time streaming
+- **App Shell** with sidebar navigation, top bar, and dark developer-console theme
+- **Profiles page** with summary cards (Total/Ready/Missing SOUL/Runtime Unknown/Last Scan), runtime status card, and enhanced table with Config/SOUL/Runtime/Health status chips
+- **StatusChip** system with color-coded health semantics (success/warning/error/default) across Config, SOUL, Runtime, and Health dimensions
 
 The next planned stage is **P3: Doctor / Health Check**.
 
@@ -139,13 +142,18 @@ By default the server listens **only** on `127.0.0.1`. Passing `--host 0.0.0.0` 
 | PR15: Gateway status | Done |
 | PR16: Gateway start / stop / restart | Done |
 | PR17: Basic Logs viewer | Done |
-| PR18-PR20: Doctor / Health Check | Planned next |
-| PR21-PR26: Diff, backup history, rollback, Monaco, form config, SOUL templates | Planned |
-| PR27-PR30: MCP / Skills / Cron | Planned |
-| PR31-PR35: npm/npx Alpha release | Planned |
+| PR19: UI Shell & Profiles page refactoring | Done |
+| PR20: P3 stability check & doc sync | In progress |
+| PR21-PR23: Doctor / Health Check | Planned |
+| PR24-PR29: Diff, backup history, rollback, Monaco, form config, SOUL templates | Planned |
+| PR30-PR33: MCP / Skills / Cron | Planned |
+| PR34-PR38: npm/npx Alpha release | Planned |
 
 ## Current Limitations
 
+- **UI Shell:** Sidebar navigation items beyond Profiles (Dashboard, Gateway, Logs, Health, Templates, Settings) currently show placeholder pages.
+- **Runtime status:** All profiles display "Unknown" for Runtime state in the table; the API does not yet report per-profile runtime/gateway process status.
+- **Summary cards:** The "Runtime Unknown" count always equals the total profile count due to the missing runtime data.
 - Gateway commands are lightweight wrappers around the Hermes CLI and should be validated against real multi-Profile Gateway behavior before wider use.
 - Logs viewer reads recent lines from Profile log files; it does not provide WebSocket or live tail streaming.
 - Import currently validates a directory as a Profile; persistent registry-style import behavior is not yet implemented.
