@@ -1,13 +1,23 @@
 import { useEffect, useState, useCallback } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import Alert from "@mui/material/Alert";
 import Chip from "@mui/material/Chip";
 import MonacoEditor from "./MonacoEditor";
 import DiffPreview from "./DiffPreview";
 import BackupHistory from "./BackupHistory";
+import { SOUL_TEMPLATES } from "../data/soulTemplates";
+import Dialog from "@mui/material/Dialog";
+import DialogTitle from "@mui/material/DialogTitle";
+import DialogContent from "@mui/material/DialogContent";
+import DialogActions from "@mui/material/DialogActions";
+import List from "@mui/material/List";
+import ListItemButton from "@mui/material/ListItemButton";
+import ListItemText from "@mui/material/ListItemText";
+import Radio from "@mui/material/Radio";
+import RadioGroup from "@mui/material/RadioGroup";
+import FormControlLabel from "@mui/material/FormControlLabel";
 import type { EditableFileResult, ValidateFileResponse, SaveFileResponse } from "@hermes-hub/shared";
 
 type WebFileResponse = { ok: true; data: EditableFileResult } | { ok: false; error: { message: string } };
@@ -27,6 +37,8 @@ export default function SoulEditor({ profileId, onBack }: { profileId: string; o
   const [error, setError] = useState("");
   const [original, setOriginal] = useState("");
   const [diffOpen, setDiffOpen] = useState(false);
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const [insertMode, setInsertMode] = useState<"append" | "replace">("append");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -122,6 +134,7 @@ export default function SoulEditor({ profileId, onBack }: { profileId: string; o
       <Box sx={{ display: "flex", gap: 1, mb: 1 }}>
         <Button variant="outlined" size="small" onClick={handleCheck}>Validate Content</Button>
         <Button variant="outlined" size="small" onClick={() => setDiffOpen(true)}>Preview Changes</Button>
+        <Button variant="outlined" size="small" onClick={() => setTemplateOpen(true)}>Insert Template</Button>
         <Button variant="contained" size="small" onClick={handleSave}>Save SOUL.md</Button>
       </Box>
 
@@ -149,6 +162,33 @@ export default function SoulEditor({ profileId, onBack }: { profileId: string; o
         modified={content}
         fileType="SOUL.md"
       />
+
+      <Dialog open={templateOpen} onClose={() => setTemplateOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Insert SOUL Template</DialogTitle>
+        <DialogContent>
+          <RadioGroup value={insertMode} onChange={(e) => setInsertMode(e.target.value as "append" | "replace")} row sx={{ mb: 1 }}>
+            <FormControlLabel value="append" control={<Radio size="small" />} label="Append" />
+            <FormControlLabel value="replace" control={<Radio size="small" />} label="Replace" />
+          </RadioGroup>
+          <List dense>
+            {SOUL_TEMPLATES.map((t) => (
+              <ListItemButton
+                key={t.id}
+                onClick={() => {
+                  setContent(insertMode === "replace" ? t.content : (content ? content + "\n\n" + t.content : t.content));
+                  setTemplateOpen(false);
+                }}
+                sx={{ borderRadius: 1, mb: 0.5 }}
+              >
+                <ListItemText primary={t.name} secondary={t.description} />
+              </ListItemButton>
+            ))}
+          </List>
+        </DialogContent>
+        <DialogActions>
+          <Button size="small" onClick={() => setTemplateOpen(false)}>Cancel</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

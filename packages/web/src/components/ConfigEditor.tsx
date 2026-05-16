@@ -1,11 +1,11 @@
 import { useEffect, useState, useCallback } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import Alert from "@mui/material/Alert";
 import Chip from "@mui/material/Chip";
 import MonacoEditor from "./MonacoEditor";
+import ConfigForm, { parseConfigFields, mergeConfigFields } from "./ConfigForm";
 import DiffPreview from "./DiffPreview";
 import BackupHistory from "./BackupHistory";
 import type { EditableFileResult, ValidateFileResponse, SaveFileResponse } from "@hermes-hub/shared";
@@ -27,6 +27,7 @@ export default function ConfigEditor({ profileId, onBack }: { profileId: string;
   const [error, setError] = useState("");
   const [original, setOriginal] = useState("");
   const [diffOpen, setDiffOpen] = useState(false);
+  const [formMode, setFormMode] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -100,14 +101,27 @@ export default function ConfigEditor({ profileId, onBack }: { profileId: string;
         <Chip label={`${readable ? "R" : "No R"} / ${writable ? "W" : "No W"}`} size="small" />
       </Box>
 
-      <Box sx={{ mb: 1 }}>
-        <MonacoEditor
-          language="yaml"
-          value={content}
-          onChange={setContent}
-          readOnly={!writable}
-        />
+      <Box sx={{ mb: 1, display: "flex", gap: 1 }}>
+        <Button size="small" variant={formMode ? "outlined" : "contained"} onClick={() => setFormMode(false)}>Raw YAML</Button>
+        <Button size="small" variant={formMode ? "contained" : "outlined"} onClick={() => setFormMode(true)}>Form</Button>
       </Box>
+      {formMode ? (
+        <Box sx={{ mb: 1, p: 2, border: "1px solid", borderColor: "divider", borderRadius: 1 }}>
+          <ConfigForm
+            fields={parseConfigFields(content)}
+            onChange={(fields) => setContent(mergeConfigFields(content, fields))}
+          />
+        </Box>
+      ) : (
+        <Box sx={{ mb: 1 }}>
+          <MonacoEditor
+            language="yaml"
+            value={content}
+            onChange={setContent}
+            readOnly={!writable}
+          />
+        </Box>
+      )}
 
       <Box sx={{ display: "flex", gap: 1, mb: 1 }}>
         <Button variant="outlined" size="small" onClick={handleValidate}>Validate YAML</Button>
