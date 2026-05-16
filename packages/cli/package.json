@@ -14,6 +14,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@hermes-hub/core": "workspace:*",
     "@hermes-hub/server": "workspace:*",
     "@hermes-hub/shared": "workspace:*",
     "commander": "^14.0.3",

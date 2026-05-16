@@ -7,6 +7,7 @@ import { Command } from "commander";
 import open from "open";
 import { createHermesHubServer } from "@hermes-hub/server";
 import type { ApiResponse, HealthCheckData } from "@hermes-hub/shared";
+import { createMockHermesHome } from "@hermes-hub/core";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8899;
@@ -16,6 +17,7 @@ export type CliHealthResponse = ApiResponse<HealthCheckData>;
 type CliOptions = {
   host: string;
   home?: string;
+  mock?: boolean;
   port: number;
   open: boolean;
 };
@@ -89,12 +91,23 @@ async function main() {
     .version(readPackageVersion())
     .option("--host <host>", "host to bind the local server", DEFAULT_HOST)
     .option("--home <path>", "Hermes home path to use for runtime detection")
+    .option("--mock", "create a mock HERMES_HOME for testing")
     .option("--port <port>", "port to bind the local server", parsePort, DEFAULT_PORT)
     .option("--no-open", "do not open the browser after startup");
 
   program.parse(process.argv.filter((arg, index) => index <= 1 || arg !== "--"));
 
   const options = program.opts<CliOptions>();
+
+  let hermesHomeOverride = options.home;
+
+  if (options.mock) {
+    const mockPath = await createMockHermesHome();
+
+    console.log(`Mock HERMES_HOME created at ${mockPath}`);
+    hermesHomeOverride ??= mockPath;
+  }
+
   const port = await findAvailablePort(options.port, options.host);
 
   if (options.host === "0.0.0.0") {
@@ -105,7 +118,7 @@ async function main() {
 
   const app = createHermesHubServer({
     version: readPackageVersion(),
-    hermesHomeOverride: options.home,
+    hermesHomeOverride,
   });
 
   await app.listen({
