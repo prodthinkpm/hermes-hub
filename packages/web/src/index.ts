@@ -6,6 +6,7 @@ import type {
   ProfilesListResponse,
   ProfileSummary,
   RuntimeInfo,
+  SaveFileResponse,
   ValidateFileResponse,
 } from "@hermes-hub/shared";
 
@@ -15,6 +16,7 @@ export type WebProfilesResponse = ApiResponse<ProfilesListResponse>;
 export type WebProfileDetailResponse = ApiResponse<ProfileDetail>;
 export type WebConfigFileResponse = ApiResponse<EditableFileResult>;
 export type WebValidateConfigResponse = ApiResponse<ValidateFileResponse>;
+export type WebSaveFileResponse = ApiResponse<SaveFileResponse>;
 
 function createElement<K extends keyof HTMLElementTagNameMap>(
   tagName: K,
@@ -355,6 +357,7 @@ export function mountProfileDetail(
   profileId: string,
   onBack: () => void,
   onOpenConfig?: () => void,
+  onOpenSoul?: () => void,
 ) {
   const header = createElement("div", "section-header");
   const title = document.createElement("h2");
@@ -381,8 +384,14 @@ export function mountProfileDetail(
   }
 
   openSoulButton.type = "button";
-  openSoulButton.textContent = "Open SOUL (coming soon)";
-  openSoulButton.disabled = true;
+  openSoulButton.textContent = "Open SOUL";
+
+  if (onOpenSoul) {
+    openSoulButton.addEventListener("click", onOpenSoul);
+  } else {
+    openSoulButton.disabled = true;
+    openSoulButton.textContent = "Open SOUL (unavailable)";
+  }
 
   actionButtons.append(openConfigButton, openSoulButton);
   header.append(title, backButton);
@@ -488,6 +497,7 @@ export function mountConfigEditor(
 
   const validateButton = document.createElement("button");
   const validationContainer = createElement("div");
+  const saveResult = createElement("div", "save-result");
 
   validateButton.type = "button";
   validateButton.textContent = "Validate YAML";
@@ -495,13 +505,21 @@ export function mountConfigEditor(
   const saveButton = document.createElement("button");
 
   saveButton.type = "button";
-  saveButton.textContent = "Save (coming in next update)";
-  saveButton.disabled = true;
+  saveButton.textContent = "Save config.yaml";
+
+  const securityNotice = document.createElement("p");
+
+  securityNotice.style.fontSize = "12px";
+  securityNotice.style.color = "#656d76";
+  securityNotice.style.marginTop = "8px";
+  securityNotice.textContent =
+    "Security notice: This editor shows the real file content. Do not paste it into untrusted environments.";
 
   actionsBar.append(validateButton, saveButton);
 
   validateButton.addEventListener("click", async () => {
     validationContainer.textContent = "Validating...";
+    saveResult.textContent = "";
 
     try {
       const response = await fetch(
@@ -525,6 +543,39 @@ export function mountConfigEditor(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       validationContainer.textContent = `Validation failed: ${message}`;
+    }
+  });
+
+  saveButton.addEventListener("click", async () => {
+    saveResult.textContent = "Saving...";
+    validationContainer.textContent = "";
+
+    try {
+      const response = await fetch(
+        `/api/profiles/${encodeURIComponent(profileId)}/config`,
+        {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ profileId, type: "config", content: textarea.value }),
+        },
+      );
+      const result = (await response.json()) as WebSaveFileResponse;
+
+      if (!result.ok) {
+        saveResult.textContent = `Save failed: ${result.error.message}`;
+        saveResult.style.color = "#cf222e";
+        return;
+      }
+
+      const { backup } = result.data;
+
+      saveResult.textContent =
+        `Saved successfully. Backup: ${backup.path} (${backup.createdAt ? new Date(backup.createdAt).toLocaleString() : ""})`;
+      saveResult.style.color = "#1a7f37";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      saveResult.textContent = `Save failed: ${message}`;
+      saveResult.style.color = "#cf222e";
     }
   });
 
@@ -582,8 +633,198 @@ export function mountConfigEditor(
     content,
     actionsBar,
     validationContainer,
+    saveResult,
+    securityNotice,
   );
   void loadConfig();
+}
+
+export function mountSoulEditor(
+  container: HTMLElement,
+  profileId: string,
+  onBack: () => void,
+) {
+  const header = createElement("div", "section-header");
+  const title = document.createElement("h2");
+  const backButton = document.createElement("button");
+  const metaBar = createElement("div", "meta-bar");
+  const content = createElement("div", "editor-content");
+  const actionsBar = createElement("div", "editor-actions");
+
+  title.textContent = "SOUL.md Editor";
+  backButton.type = "button";
+  backButton.textContent = "Back to Detail";
+  backButton.addEventListener("click", onBack);
+
+  const filePathLabel = document.createElement("span");
+  const fileMtimeLabel = document.createElement("span");
+  const fileStatusLabel = document.createElement("span");
+
+  filePathLabel.style.marginRight = "20px";
+  fileMtimeLabel.style.marginRight = "20px";
+  metaBar.append(filePathLabel, fileMtimeLabel, fileStatusLabel);
+
+  const textarea = document.createElement("textarea");
+
+  textarea.rows = 30;
+  textarea.style.width = "100%";
+  textarea.style.fontFamily = "ui-monospace, SFMono-Regular, monospace";
+  textarea.style.fontSize = "13px";
+  textarea.style.padding = "12px";
+  textarea.style.boxSizing = "border-box";
+
+  const validateButton = document.createElement("button");
+  const validationContainer = createElement("div");
+  const saveResult = createElement("div", "save-result");
+
+  validateButton.type = "button";
+  validateButton.textContent = "Check Content";
+
+  const saveButton = document.createElement("button");
+
+  saveButton.type = "button";
+  saveButton.textContent = "Save SOUL.md";
+
+  const saveEmptyWarning = document.createElement("p");
+
+  saveEmptyWarning.style.fontSize = "12px";
+  saveEmptyWarning.style.color = "#656d76";
+  saveEmptyWarning.style.marginTop = "8px";
+  saveEmptyWarning.textContent =
+    "Note: Empty SOUL.md files are not recommended and will be blocked on save.";
+
+  actionsBar.append(validateButton, saveButton);
+
+  validateButton.addEventListener("click", async () => {
+    validationContainer.textContent = "Checking...";
+
+    try {
+      const response = await fetch(
+        `/api/profiles/${encodeURIComponent(profileId)}/soul/validate`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ profileId, type: "soul", content: textarea.value }),
+        },
+      );
+      const result = (await response.json()) as WebValidateConfigResponse;
+
+      if (!result.ok) {
+        validationContainer.textContent = `Check failed: ${result.error.message}`;
+        return;
+      }
+
+      validationContainer.replaceChildren(
+        renderValidationResult(result.data),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      validationContainer.textContent = `Check failed: ${message}`;
+    }
+  });
+
+  saveButton.addEventListener("click", async () => {
+    if (textarea.value.trim().length === 0) {
+      saveResult.textContent =
+        "Save blocked: SOUL.md content must not be empty. Add content before saving.";
+      saveResult.style.color = "#cf222e";
+      return;
+    }
+
+    saveResult.textContent = "Saving...";
+    validationContainer.textContent = "";
+
+    try {
+      const response = await fetch(
+        `/api/profiles/${encodeURIComponent(profileId)}/soul`,
+        {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ profileId, type: "soul", content: textarea.value }),
+        },
+      );
+      const result = (await response.json()) as WebSaveFileResponse;
+
+      if (!result.ok) {
+        saveResult.textContent = `Save failed: ${result.error.message}`;
+        saveResult.style.color = "#cf222e";
+        return;
+      }
+
+      const { backup } = result.data;
+
+      saveResult.textContent =
+        `Saved successfully. Backup: ${backup.path} (${backup.createdAt ? new Date(backup.createdAt).toLocaleString() : ""})`;
+      saveResult.style.color = "#1a7f37";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      saveResult.textContent = `Save failed: ${message}`;
+      saveResult.style.color = "#cf222e";
+    }
+  });
+
+  async function loadSoul() {
+    content.textContent = "Loading SOUL.md...";
+
+    try {
+      const response = await fetch(
+        `/api/profiles/${encodeURIComponent(profileId)}/soul`,
+      );
+      const result = (await response.json()) as WebConfigFileResponse;
+
+      if (!result.ok) {
+        content.textContent = `Failed to load SOUL.md: ${result.error.message}`;
+        return;
+      }
+
+      const file = result.data;
+
+      filePathLabel.textContent = `File: ${file.path}`;
+
+      fileMtimeLabel.textContent = file.status.updatedAt
+        ? `Modified: ${new Date(file.status.updatedAt).toLocaleString()}`
+        : "Modified: —";
+
+      const readable = file.status.readable ? "Readable" : "Not readable";
+      const writable = file.status.writable ? "Writable" : "Not writable";
+
+      fileStatusLabel.textContent = `Status: ${readable} | ${writable}`;
+
+      textarea.value = file.content;
+
+      if (!file.status.exists) {
+        const note = document.createElement("p");
+
+        note.style.marginTop = "12px";
+        note.textContent =
+          "SOUL.md does not exist yet. It will be created when you save.";
+        content.replaceChildren(textarea, note);
+        return;
+      }
+
+      if (!file.status.readable) {
+        content.textContent = "SOUL.md is not readable. Check file permissions.";
+        return;
+      }
+
+      content.replaceChildren(textarea);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      content.textContent = `Failed to load SOUL.md: ${message}`;
+    }
+  }
+
+  header.append(title, backButton);
+  container.replaceChildren(
+    header,
+    metaBar,
+    content,
+    actionsBar,
+    validationContainer,
+    saveResult,
+    saveEmptyWarning,
+  );
+  void loadSoul();
 }
 
 export function mountHermesHubApp(container: HTMLElement) {
@@ -600,13 +841,27 @@ export function mountHermesHubApp(container: HTMLElement) {
   }
 
   function showDetail(profileId: string) {
-    mountProfileDetail(content, profileId, showList, () => {
-      showConfigEditor(profileId);
-    });
+    mountProfileDetail(
+      content,
+      profileId,
+      showList,
+      () => {
+        showConfigEditor(profileId);
+      },
+      () => {
+        showSoulEditor(profileId);
+      },
+    );
   }
 
   function showConfigEditor(profileId: string) {
     mountConfigEditor(content, profileId, () => {
+      showDetail(profileId);
+    });
+  }
+
+  function showSoulEditor(profileId: string) {
+    mountSoulEditor(content, profileId, () => {
       showDetail(profileId);
     });
   }

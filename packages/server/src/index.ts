@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
-import { createError, detectRuntime, readEditableFile, readProfile, scanProfiles, validateYaml } from "@hermes-hub/core";
+import { createError, detectRuntime, HermesHubCoreError, readEditableFile, readProfile, saveEditableFile, scanProfiles, validateYaml } from "@hermes-hub/core";
 import {
   ApiErrorCode,
   type ApiError,
@@ -12,6 +12,8 @@ import {
   type ProfileDetail,
   type ProfilesListResponse,
   type RuntimeInfo,
+  type SaveFileRequest,
+  type SaveFileResponse,
   type ValidateFileRequest,
   type ValidateFileResponse,
 } from "@hermes-hub/shared";
@@ -92,6 +94,17 @@ export function createHermesHubServer(
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof HermesHubHttpError) {
       void reply.status(error.statusCode).send(failure(error.apiError));
+      return;
+    }
+
+    if (error instanceof HermesHubCoreError) {
+      const statusCode = error.apiError.code ===
+        ApiErrorCode.HermesHomeNotFound ||
+        error.apiError.code === ApiErrorCode.ProfileNotFound
+        ? 404
+        : 422;
+
+      void reply.status(statusCode).send(failure(error.apiError));
       return;
     }
 
@@ -206,6 +219,100 @@ export function createHermesHubServer(
       const { content } = (request.body ?? {}) as ValidateFileRequest;
 
       return success(validateYaml(content ?? ""));
+    },
+  );
+
+  app.put(
+    "/api/profiles/:id/config",
+    async (request): Promise<ApiResponse<SaveFileResponse>> => {
+      runtimeCache ??= await detectRuntime({
+        hermesHomeOverride: options.hermesHomeOverride,
+      });
+
+      const { content } = (request.body ?? {}) as SaveFileRequest;
+
+      return success(
+        await saveEditableFile(
+          runtimeCache,
+          (request.params as { id: string }).id,
+          "config",
+          content ?? "",
+        ),
+      );
+    },
+  );
+
+  app.get(
+    "/api/profiles/:id/soul",
+    async (request): Promise<ApiResponse<EditableFileResult>> => {
+      runtimeCache ??= await detectRuntime({
+        hermesHomeOverride: options.hermesHomeOverride,
+      });
+
+      const result = await readEditableFile(
+        runtimeCache,
+        (request.params as { id: string }).id,
+        "soul",
+      );
+
+      if (!result) {
+        throw new HermesHubHttpError(
+          404,
+          createError(
+            ApiErrorCode.ProfileNotFound,
+            "Profile not found",
+            { profileId: (request.params as { id: string }).id },
+            "Check that the profile exists under the current HERMES_HOME.",
+          ),
+        );
+      }
+
+      return success(result);
+    },
+  );
+
+  app.post(
+    "/api/profiles/:id/soul/validate",
+    async (request): Promise<ApiResponse<ValidateFileResponse>> => {
+      const { content } = (request.body ?? {}) as ValidateFileRequest;
+      const text = content ?? "";
+
+      if (text.trim().length === 0) {
+        return success({
+          valid: false,
+          errors: [
+            createError(
+              ApiErrorCode.ValidationError,
+              "SOUL.md content is empty. Empty SOUL files are not recommended.",
+              undefined,
+              "Add identity and behaviour instructions to the SOUL.md file.",
+            ),
+          ],
+          warnings: [],
+        });
+      }
+
+      return success({ valid: true, errors: [], warnings: [] });
+    },
+  );
+
+  app.put(
+    "/api/profiles/:id/soul",
+    async (request): Promise<ApiResponse<SaveFileResponse>> => {
+      runtimeCache ??= await detectRuntime({
+        hermesHomeOverride: options.hermesHomeOverride,
+      });
+
+      const { content } = (request.body ?? {}) as SaveFileRequest;
+
+      return success(
+        await saveEditableFile(
+          runtimeCache,
+          (request.params as { id: string }).id,
+          "soul",
+          content ?? "",
+        ),
+      );
     },
   );
 

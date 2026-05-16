@@ -1,13 +1,14 @@
-import { access, readdir, readFile, stat } from "node:fs/promises";
+import { access, copyFile, mkdir, open, readdir, readFile, rename, stat, unlink } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { execa } from "execa";
 import { parse as parseYaml } from "yaml";
 import {
   ApiErrorCode,
   type ApiError,
+  type BackupInfo,
   type ConfigSummary,
   type EditableFileResult,
   type EditableFileType,
@@ -20,8 +21,19 @@ import {
   type ProfileSummary,
   type ProfilesListResponse,
   type RuntimeInfo,
+  type SaveFileResponse,
   type ValidateFileResponse,
 } from "@hermes-hub/shared";
+
+export class HermesHubCoreError extends Error {
+  readonly apiError: ApiError;
+
+  constructor(apiError: ApiError) {
+    super(apiError.message);
+    this.name = "HermesHubCoreError";
+    this.apiError = apiError;
+  }
+}
 
 export type DetectRuntimeOptions = {
   hermesHomeOverride?: string;
@@ -577,5 +589,210 @@ export async function readEditableFile(
     path: filePath,
     content,
     status,
+  };
+}
+
+function detectRedactedPlaceholder(content: string): ApiError | null {
+  // Match sensitive keys with redacted placeholder values in raw YAML.
+  // Examples: api_key: ********  or  token: "••••••"
+  const sensitiveKey = String.raw`(api[_-]?key|token|secret|password|auth|credential|key)`;
+  const redactedVal = String.raw`(\*{3,}|•{3,}|REDACTED|<redacted>|\[REDACTED\]|\[HIDDEN\])`;
+  const regex = new RegExp(
+    String.raw`(?:^|\n)\s*${sensitiveKey}\s*:\s*"?${redactedVal}"?\s*(?:\n|$)`,
+    "gim",
+  );
+
+  const match = regex.exec(content);
+
+  if (match) {
+    return createError(
+      ApiErrorCode.ValidationError,
+      `The field "${match[1]}" appears to contain a redacted placeholder. Replace it with a real value before saving.`,
+      { field: match[1] },
+      "Paste the actual value or remove the field if it is not needed.",
+    );
+  }
+
+  return null;
+}
+
+async function backupFile(
+  filePath: string,
+  profileId: string,
+): Promise<BackupInfo> {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupDir = join(
+    homedir(),
+    ".hermes-hub",
+    "backups",
+    profileId,
+    timestamp,
+  );
+
+  await mkdir(backupDir, { recursive: true });
+
+  const fileName = basename(filePath);
+  const backupPath = join(backupDir, fileName);
+
+  try {
+    await stat(filePath);
+    await copyFile(filePath, backupPath);
+    const stats = await stat(backupPath);
+
+    return {
+      path: backupPath,
+      createdAt: new Date().toISOString(),
+      sizeBytes: stats.size,
+    };
+  } catch {
+    // File does not exist — record the intent without a file backup.
+    return {
+      path: backupDir,
+      createdAt: new Date().toISOString(),
+    };
+  }
+}
+
+async function atomicWrite(
+  filePath: string,
+  content: string,
+): Promise<void> {
+  const tmpPath = `${filePath}.tmp-${Date.now()}`;
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+
+  try {
+    handle = await open(tmpPath, "w", 0o600);
+    await handle.writeFile(content);
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await rename(tmpPath, filePath);
+  } catch (error) {
+    if (handle) {
+      try {
+        await handle.close();
+      } catch {
+        // best effort
+      }
+    }
+
+    try {
+      await unlink(tmpPath);
+    } catch {
+      // best effort
+    }
+
+    throw error;
+  }
+}
+
+export async function saveEditableFile(
+  runtime: RuntimeInfo,
+  profileId: string,
+  type: EditableFileType,
+  content: string,
+): Promise<SaveFileResponse> {
+  if (!runtime.hermesHome.found || !runtime.hermesHome.path) {
+    throw new HermesHubCoreError(
+      createError(
+        ApiErrorCode.HermesHomeNotFound,
+        "HERMES_HOME is not available",
+        undefined,
+        "Check that Hermes CLI and HERMES_HOME are configured correctly.",
+      ),
+    );
+  }
+
+  const candidates = await profileCandidatesFromHermesHome(
+    runtime.hermesHome.path,
+  );
+  const profilePath = candidates.find(
+    (candidate) => profileIdForPath(candidate) === profileId,
+  );
+
+  if (!profilePath) {
+    throw new HermesHubCoreError(
+      createError(
+        ApiErrorCode.ProfileNotFound,
+        "Profile not found",
+        { profileId },
+        "Check that the profile exists under the current HERMES_HOME.",
+      ),
+    );
+  }
+
+  const fileName = type === "config" ? "config.yaml" : "SOUL.md";
+  const filePath = join(profilePath, fileName);
+
+  // Validate config YAML
+  if (type === "config") {
+    // Detect redacted placeholders first (before YAML parse, since some
+    // redacted patterns like ******** are valid YAML aliases).
+    const redacted = detectRedactedPlaceholder(content);
+
+    if (redacted) {
+      throw new HermesHubCoreError(redacted);
+    }
+
+    const validation = validateYaml(content);
+
+    if (!validation.valid) {
+      throw new HermesHubCoreError(validation.errors[0]);
+    }
+  }
+
+  // Validate SOUL content
+  if (type === "soul" && content.trim().length === 0) {
+    throw new HermesHubCoreError(
+      createError(
+        ApiErrorCode.ValidationError,
+        "SOUL.md content must not be empty",
+        undefined,
+        "Add content to the SOUL.md file before saving.",
+      ),
+    );
+  }
+
+  // Backup
+  let backup: BackupInfo;
+
+  try {
+    backup = await backupFile(filePath, profileId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    throw new HermesHubCoreError(
+      createError(
+        ApiErrorCode.FileWriteFailed,
+        "Backup failed. Save aborted to protect existing files.",
+        { message },
+        "Check disk space and permissions on the backup directory.",
+      ),
+    );
+  }
+
+  // Atomic write
+  try {
+    await mkdir(dirname(filePath), { recursive: true });
+    await atomicWrite(filePath, content);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    throw new HermesHubCoreError(
+      createError(
+        ApiErrorCode.FileWriteFailed,
+        "Failed to write file. The original file was not modified.",
+        { message, backupPath: backup.path },
+        "Check file permissions and disk space.",
+      ),
+    );
+  }
+
+  return {
+    profileId,
+    type,
+    path: filePath,
+    backup,
+    savedAt: new Date().toISOString(),
   };
 }
