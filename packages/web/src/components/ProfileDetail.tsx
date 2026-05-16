@@ -10,6 +10,7 @@ import Typography from "@mui/material/Typography";
 import Chip from "@mui/material/Chip";
 import Alert from "@mui/material/Alert";
 import TableContainer from "@mui/material/TableContainer";
+import HealthSummaryCard from "./HealthSummaryCard";
 import type { ProfileDetail as ProfileDetailType, GatewayStatus, GatewayActionResult } from "@hermes-hub/shared";
 
 type WebDetailResponse = { ok: true; data: ProfileDetailType } | { ok: false; error: { message: string } };
@@ -131,6 +132,8 @@ export default function ProfileDetail({
           </TableBody>
         </Table>
       </TableContainer>
+
+      <HealthSummaryCard profileId={profileId} />
 
       {!s.exists && (
         <Typography color="warning.main" sx={{ mb: 1 }}>
