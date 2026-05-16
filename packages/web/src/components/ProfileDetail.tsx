@@ -11,6 +11,9 @@ import Chip from "@mui/material/Chip";
 import Alert from "@mui/material/Alert";
 import TableContainer from "@mui/material/TableContainer";
 import HealthSummaryCard from "./HealthSummaryCard";
+import McpServerList from "./McpServerList";
+import SkillsList from "./SkillsList";
+import CronJobList from "./CronJobList";
 import type { ProfileDetail as ProfileDetailType, GatewayStatus, GatewayActionResult } from "@hermes-hub/shared";
 
 type WebDetailResponse = { ok: true; data: ProfileDetailType } | { ok: false; error: { message: string } };
@@ -134,6 +137,15 @@ export default function ProfileDetail({
       </TableContainer>
 
       <HealthSummaryCard profileId={profileId} />
+
+      <Typography variant="h3" sx={{ mb: 1 }}>MCP Servers</Typography>
+      <Box sx={{ mb: 2 }}><McpServerList profileId={profileId} /></Box>
+
+      <Typography variant="h3" sx={{ mb: 1 }}>Skills</Typography>
+      <Box sx={{ mb: 2 }}><SkillsList profileId={profileId} /></Box>
+
+      <Typography variant="h3" sx={{ mb: 1 }}>Cron Jobs</Typography>
+      <Box sx={{ mb: 2 }}><CronJobList profileId={profileId} /></Box>
 
       {!s.exists && (
         <Typography color="warning.main" sx={{ mb: 1 }}>

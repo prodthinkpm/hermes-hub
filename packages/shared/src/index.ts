@@ -279,6 +279,32 @@ export type HealthCheckResult = {
   summary: HealthCheckSummary;
 };
 
+export type McpServer = {
+  name: string;
+  command: string;
+  args: string[];
+  envKeys: string[];
+  enabled: boolean;
+  status: "configured" | "missing_command" | "disabled" | "unknown";
+};
+
+export type SkillEntry = {
+  name: string;
+  source: string;
+  enabled: boolean;
+  risk: "low" | "medium" | "high" | "unknown";
+  permissions: string[];
+};
+
+export type CronJob = {
+  name: string;
+  schedule: string;
+  enabled: boolean;
+  lastRun?: string;
+  nextRun?: string;
+  lastResult?: string;
+};
+
 export type BackupEntry = {
   id: string;
   profileId: string;

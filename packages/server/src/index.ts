@@ -2,7 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import Fastify from "fastify";
-import { cloneProfile, createError, createProfile, detectRuntime, getGatewayStatus, HermesHubCoreError, importProfile, listBackups, readBackupContent, readEditableFile, readLogs, readProfile, restartGateway, restoreBackup, runHealthCheck, saveEditableFile, scanProfiles, startGateway, stopGateway, validateYaml } from "@hermes-hub/core";
+import { cloneProfile, createError, createProfile, detectRuntime, getGatewayStatus, HermesHubCoreError, importProfile, listBackups, parseCronJobs, parseMcpServers, parseSkills, readBackupContent, readEditableFile, readLogs, readProfile, restartGateway, restoreBackup, runHealthCheck, saveEditableFile, scanProfiles, startGateway, stopGateway, validateYaml } from "@hermes-hub/core";
 import {
   ApiErrorCode,
   type ApiError,
@@ -16,7 +16,10 @@ import {
   type GatewayActionResult,
   type GatewayStatus,
   type BackupEntry,
+  type CronJob,
   type HealthCheckData,
+  type McpServer,
+  type SkillEntry,
   type HealthCheckResult,
   type ImportProfileRequest,
   type ImportProfileResponse,
@@ -562,6 +565,27 @@ export function createHermesHubServer(
       return success(await restoreBackup(backup.backupPath, targetPath));
     },
   );
+
+  app.get("/api/profiles/:id/mcp", async (request): Promise<ApiResponse<McpServer[]>> => {
+    runtimeCache ??= await detectRuntime({ hermesHomeOverride: options.hermesHomeOverride });
+    const detail = await readProfile(runtimeCache, (request.params as { id: string }).id);
+    if (!detail) throw new HermesHubHttpError(404, createError(ApiErrorCode.ProfileNotFound, "Profile not found"));
+    return success(await parseMcpServers(detail.config.path));
+  });
+
+  app.get("/api/profiles/:id/skills", async (request): Promise<ApiResponse<SkillEntry[]>> => {
+    runtimeCache ??= await detectRuntime({ hermesHomeOverride: options.hermesHomeOverride });
+    const detail = await readProfile(runtimeCache, (request.params as { id: string }).id);
+    if (!detail) throw new HermesHubHttpError(404, createError(ApiErrorCode.ProfileNotFound, "Profile not found"));
+    return success(await parseSkills(detail.hermesHome));
+  });
+
+  app.get("/api/profiles/:id/cron", async (request): Promise<ApiResponse<CronJob[]>> => {
+    runtimeCache ??= await detectRuntime({ hermesHomeOverride: options.hermesHomeOverride });
+    const detail = await readProfile(runtimeCache, (request.params as { id: string }).id);
+    if (!detail) throw new HermesHubHttpError(404, createError(ApiErrorCode.ProfileNotFound, "Profile not found"));
+    return success(await parseCronJobs(detail.hermesHome));
+  });
 
   app.get("/", async (_request, reply) => {
     const html = await readWebIndex();
