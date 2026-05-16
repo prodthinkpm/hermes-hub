@@ -5,6 +5,7 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import Alert from "@mui/material/Alert";
 import Chip from "@mui/material/Chip";
+import DiffPreview from "./DiffPreview";
 import type { EditableFileResult, ValidateFileResponse, SaveFileResponse } from "@hermes-hub/shared";
 
 type WebFileResponse = { ok: true; data: EditableFileResult } | { ok: false; error: { message: string } };
@@ -22,6 +23,8 @@ export default function SoulEditor({ profileId, onBack }: { profileId: string; o
   const [saveColor, setSaveColor] = useState<"success" | "error">("success");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [original, setOriginal] = useState("");
+  const [diffOpen, setDiffOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -31,6 +34,7 @@ export default function SoulEditor({ profileId, onBack }: { profileId: string; o
       if (!result.ok) { setError(result.error.message); return; }
       const f = result.data;
       setContent(f.content);
+      setOriginal(f.content);
       setPath(f.path);
       setMtime(f.status.updatedAt ? new Date(f.status.updatedAt).toLocaleString() : "—");
       setReadable(f.status.readable);
@@ -76,6 +80,7 @@ export default function SoulEditor({ profileId, onBack }: { profileId: string; o
       if (!result.ok) { setSaveMsg(result.error.message); setSaveColor("error"); return; }
       setSaveMsg(`Saved. Backup: ${result.data.backup.path}`);
       setSaveColor("success");
+      setOriginal(content);
     } catch (e) {
       setSaveMsg(e instanceof Error ? e.message : String(e));
       setSaveColor("error");
@@ -117,6 +122,7 @@ export default function SoulEditor({ profileId, onBack }: { profileId: string; o
 
       <Box sx={{ display: "flex", gap: 1, mb: 1 }}>
         <Button variant="outlined" size="small" onClick={handleCheck}>Validate Content</Button>
+        <Button variant="outlined" size="small" onClick={() => setDiffOpen(true)}>Preview Changes</Button>
         <Button variant="contained" size="small" onClick={handleSave}>Save SOUL.md</Button>
       </Box>
 
@@ -131,6 +137,14 @@ export default function SoulEditor({ profileId, onBack }: { profileId: string; o
       <Typography variant="body2" color="text.secondary">
         Note: Empty SOUL.md files are not recommended and will be blocked on save.
       </Typography>
+
+      <DiffPreview
+        open={diffOpen}
+        onClose={() => setDiffOpen(false)}
+        original={original}
+        modified={content}
+        fileType="SOUL.md"
+      />
     </Box>
   );
 }

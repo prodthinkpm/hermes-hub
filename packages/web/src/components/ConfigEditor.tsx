@@ -5,6 +5,7 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import Alert from "@mui/material/Alert";
 import Chip from "@mui/material/Chip";
+import DiffPreview from "./DiffPreview";
 import type { EditableFileResult, ValidateFileResponse, SaveFileResponse } from "@hermes-hub/shared";
 
 type WebFileResponse = { ok: true; data: EditableFileResult } | { ok: false; error: { message: string } };
@@ -22,6 +23,8 @@ export default function ConfigEditor({ profileId, onBack }: { profileId: string;
   const [saveColor, setSaveColor] = useState<"success" | "error">("success");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [original, setOriginal] = useState("");
+  const [diffOpen, setDiffOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -31,6 +34,7 @@ export default function ConfigEditor({ profileId, onBack }: { profileId: string;
       if (!result.ok) { setError(result.error.message); return; }
       const f = result.data;
       setContent(f.content);
+      setOriginal(f.content);
       setPath(f.path);
       setMtime(f.status.updatedAt ? new Date(f.status.updatedAt).toLocaleString() : "—");
       setReadable(f.status.readable);
@@ -71,6 +75,7 @@ export default function ConfigEditor({ profileId, onBack }: { profileId: string;
       if (!result.ok) { setSaveMsg(result.error.message); setSaveColor("error"); return; }
       setSaveMsg(`Saved. Backup: ${result.data.backup.path}`);
       setSaveColor("success");
+      setOriginal(content);
     } catch (e) {
       setSaveMsg(e instanceof Error ? e.message : String(e));
       setSaveColor("error");
@@ -106,6 +111,7 @@ export default function ConfigEditor({ profileId, onBack }: { profileId: string;
 
       <Box sx={{ display: "flex", gap: 1, mb: 1 }}>
         <Button variant="outlined" size="small" onClick={handleValidate}>Validate YAML</Button>
+        <Button variant="outlined" size="small" onClick={() => setDiffOpen(true)}>Preview Changes</Button>
         <Button variant="contained" size="small" onClick={handleSave}>Save config.yaml</Button>
       </Box>
 
@@ -125,6 +131,14 @@ export default function ConfigEditor({ profileId, onBack }: { profileId: string;
       <Alert severity="info" sx={{ fontSize: 12 }}>
         Security notice: This editor shows real file content. Do not paste it into untrusted environments.
       </Alert>
+
+      <DiffPreview
+        open={diffOpen}
+        onClose={() => setDiffOpen(false)}
+        original={original}
+        modified={content}
+        fileType="config.yaml"
+      />
     </Box>
   );
 }
