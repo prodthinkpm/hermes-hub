@@ -80,7 +80,7 @@ async function checkHome(
       "error",
       "fail",
       "HERMES_HOME was not found or is not readable",
-      "Set the HERMES_HOME environment variable or use --home to specify the path.",
+      "Set HERMES_HOME env var (export HERMES_HOME=~/.hermes) or pass --home to specify the path.",
     );
   }
 
@@ -169,7 +169,7 @@ async function checkConfig(
       "error",
       "fail",
       "config.yaml does not exist",
-      "Create a config.yaml via `hermes profile init` or the New Profile wizard.",
+      "Run `hermes profile init` in the profile directory, or use the New Profile wizard in Hermes Hub.",
       { path: configPath },
     ));
     return results;
@@ -185,7 +185,7 @@ async function checkConfig(
       "error",
       "fail",
       "config.yaml exists but is not readable",
-      "Grant read access with `chmod +r` on the file.",
+      "Run `chmod +r` on the file to grant read access.",
       { path: configPath },
     ));
     return results;
@@ -244,7 +244,7 @@ async function checkConfig(
         "warning",
         "warn",
         "config.yaml is readable but not writable",
-        "Grant write access to enable editing and saving.",
+        "Run `chmod +w` on the file to enable editing and saving.",
         { path: configPath },
       ));
     }
@@ -297,7 +297,7 @@ async function checkSoul(
       "error",
       "fail",
       "SOUL.md exists but is not readable",
-      "Grant read access with `chmod +r` on the file.",
+      "Run `chmod +r` on the file to grant read access.",
       { path: soulPath },
     ));
     return results;
@@ -353,7 +353,7 @@ async function checkSoul(
       "warning",
       "warn",
       "SOUL.md is readable but not writable",
-      "Grant write access to enable editing and saving.",
+      "Run `chmod +w` on the file to enable editing and saving.",
     ));
   }
 

@@ -44,11 +44,15 @@ function CheckItemRow({ item }: { item: HealthCheckItem }) {
       </ListItemIcon>
       <ListItemText
         primary={item.message}
-        secondary={item.suggestion}
+        secondary={
+          item.suggestion
+            ? `Fix: ${item.suggestion}`
+            : undefined
+        }
         primaryTypographyProps={{ variant: "body2", sx: { fontWeight: 500 } }}
         secondaryTypographyProps={{
           variant: "caption",
-          sx: { color: "text.secondary", mt: 0.25 },
+          sx: { color: item.status === "fail" || item.status === "warn" ? "warning.main" : "text.secondary", mt: 0.25, fontWeight: 500 },
         }}
       />
       <Chip
