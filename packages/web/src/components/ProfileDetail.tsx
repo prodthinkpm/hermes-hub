@@ -8,10 +8,13 @@ import Button from "@mui/material/Button";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Chip from "@mui/material/Chip";
+import Alert from "@mui/material/Alert";
 import TableContainer from "@mui/material/TableContainer";
-import type { ProfileDetail as ProfileDetailType } from "@hermes-hub/shared";
+import type { ProfileDetail as ProfileDetailType, GatewayStatus, GatewayActionResult } from "@hermes-hub/shared";
 
 type WebDetailResponse = { ok: true; data: ProfileDetailType } | { ok: false; error: { message: string } };
+type WebGwStatusResponse = { ok: true; data: GatewayStatus } | { ok: false; error: { message: string } };
+type WebGwActionResultResponse = { ok: true; data: GatewayActionResult } | { ok: false; error: { message: string } };
 
 export default function ProfileDetail({
   profileId,
@@ -19,15 +22,19 @@ export default function ProfileDetail({
   onOpenConfig,
   onOpenSoul,
   onClone,
+  onViewLogs,
 }: {
   profileId: string;
   onBack: () => void;
   onOpenConfig?: () => void;
   onOpenSoul?: () => void;
   onClone?: () => void;
+  onViewLogs?: () => void;
 }) {
   const [detail, setDetail] = useState<ProfileDetailType | null>(null);
   const [error, setError] = useState("");
+  const [gwStatus, setGwStatus] = useState<GatewayStatus | null>(null);
+  const [gwMsg, setGwMsg] = useState("");
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -45,6 +52,29 @@ export default function ProfileDetail({
   }, [profileId]);
 
   useEffect(() => { void load(); }, [load]);
+
+  const fetchGwStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/profiles/${encodeURIComponent(profileId)}/gateway/status`);
+      const result = (await res.json()) as WebGwStatusResponse;
+      if (result.ok) setGwStatus(result.data);
+    } catch { /* ignore */ }
+  }, [profileId]);
+
+  useEffect(() => { void fetchGwStatus(); }, [fetchGwStatus]);
+
+  const gwAction = async (action: "start" | "stop" | "restart") => {
+    setGwMsg(`${action}ing...`);
+    try {
+      const res = await fetch(`/api/profiles/${encodeURIComponent(profileId)}/gateway/${action}`, { method: "POST" });
+      const result = (await res.json()) as WebGwActionResultResponse;
+      if (result.ok) setGwMsg(result.data.message);
+      else setGwMsg(result.error.message);
+      await fetchGwStatus();
+    } catch (e) {
+      setGwMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   if (loading) return <Typography color="text.secondary">Loading profile...</Typography>;
   if (error) return <Typography color="error">{error}</Typography>;
@@ -84,6 +114,14 @@ export default function ProfileDetail({
               ["SOUL.md size", s.sizeBytes != null ? `${s.sizeBytes} bytes` : "—"],
               ["SOUL.md modified", s.updatedAt ? new Date(s.updatedAt).toLocaleString() : "—"],
               ["SOUL.md content", soulContent],
+              ["Gateway", gwStatus ? (
+                <Chip
+                  key="gw"
+                  label={gwStatus.status}
+                  color={gwStatus.status === "running" ? "success" : gwStatus.status === "error" ? "error" : gwStatus.status === "stopped" ? "default" : "warning"}
+                  size="small"
+                />
+              ) : "—"],
             ].map(([label, value], i) => (
               <TableRow key={i}>
                 <TableCell sx={{ fontWeight: 500, width: "35%" }}>{label}</TableCell>
@@ -104,7 +142,13 @@ export default function ProfileDetail({
         {onOpenConfig && <Button variant="outlined" size="small" onClick={onOpenConfig}>Open Config</Button>}
         {onOpenSoul && <Button variant="outlined" size="small" onClick={onOpenSoul}>Open SOUL</Button>}
         {onClone && <Button variant="outlined" size="small" onClick={onClone}>Clone</Button>}
+        <Button variant="outlined" size="small" color="success" onClick={() => void gwAction("start")}>Start GW</Button>
+        <Button variant="outlined" size="small" color="warning" onClick={() => void gwAction("stop")}>Stop GW</Button>
+        <Button variant="outlined" size="small" onClick={() => void gwAction("restart")}>Restart GW</Button>
+        {onViewLogs && <Button variant="outlined" size="small" onClick={onViewLogs}>View Logs</Button>}
       </Box>
+
+      {gwMsg && <Alert severity="info" sx={{ mt: 1 }}>{gwMsg}</Alert>}
     </Box>
   );
 }

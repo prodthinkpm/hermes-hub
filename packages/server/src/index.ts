@@ -2,7 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import Fastify from "fastify";
-import { cloneProfile, createError, createProfile, detectRuntime, HermesHubCoreError, readEditableFile, readProfile, saveEditableFile, scanProfiles, validateYaml } from "@hermes-hub/core";
+import { cloneProfile, createError, createProfile, detectRuntime, getGatewayStatus, HermesHubCoreError, importProfile, readEditableFile, readLogs, readProfile, restartGateway, saveEditableFile, scanProfiles, startGateway, stopGateway, validateYaml } from "@hermes-hub/core";
 import {
   ApiErrorCode,
   type ApiError,
@@ -13,7 +13,13 @@ import {
   type CreateProfileRequest,
   type CreateProfileResponse,
   type EditableFileResult,
+  type GatewayActionResult,
+  type GatewayStatus,
   type HealthCheckData,
+  type ImportProfileRequest,
+  type ImportProfileResponse,
+  type LogQuery,
+  type LogsResult,
   type ProfileDetail,
   type ProfilesListResponse,
   type RuntimeInfo,
@@ -163,6 +169,103 @@ export function createHermesHubServer(
       body.sourceProfileId = (request.params as { id: string }).id;
 
       return success(await cloneProfile(runtimeCache, body));
+    },
+  );
+
+  app.post(
+    "/api/profiles/import",
+    async (request): Promise<ApiResponse<ImportProfileResponse>> => {
+      runtimeCache ??= await detectRuntime({
+        hermesHomeOverride: options.hermesHomeOverride,
+      });
+
+      const body = (request.body ?? {}) as ImportProfileRequest;
+
+      return success(await importProfile(runtimeCache, body));
+    },
+  );
+
+  app.get(
+    "/api/profiles/:id/gateway/status",
+    async (request): Promise<ApiResponse<GatewayStatus>> => {
+      runtimeCache ??= await detectRuntime({
+        hermesHomeOverride: options.hermesHomeOverride,
+      });
+
+      return success(
+        await getGatewayStatus(
+          runtimeCache,
+          (request.params as { id: string }).id,
+        ),
+      );
+    },
+  );
+
+  app.post(
+    "/api/profiles/:id/gateway/start",
+    async (request): Promise<ApiResponse<GatewayActionResult>> => {
+      runtimeCache ??= await detectRuntime({
+        hermesHomeOverride: options.hermesHomeOverride,
+      });
+
+      return success(
+        await startGateway(
+          runtimeCache,
+          (request.params as { id: string }).id,
+        ),
+      );
+    },
+  );
+
+  app.post(
+    "/api/profiles/:id/gateway/stop",
+    async (request): Promise<ApiResponse<GatewayActionResult>> => {
+      runtimeCache ??= await detectRuntime({
+        hermesHomeOverride: options.hermesHomeOverride,
+      });
+
+      return success(
+        await stopGateway(
+          runtimeCache,
+          (request.params as { id: string }).id,
+        ),
+      );
+    },
+  );
+
+  app.post(
+    "/api/profiles/:id/gateway/restart",
+    async (request): Promise<ApiResponse<GatewayActionResult>> => {
+      runtimeCache ??= await detectRuntime({
+        hermesHomeOverride: options.hermesHomeOverride,
+      });
+
+      return success(
+        await restartGateway(
+          runtimeCache,
+          (request.params as { id: string }).id,
+        ),
+      );
+    },
+  );
+
+  app.get(
+    "/api/profiles/:id/logs",
+    async (request): Promise<ApiResponse<LogsResult>> => {
+      runtimeCache ??= await detectRuntime({
+        hermesHomeOverride: options.hermesHomeOverride,
+      });
+
+      const query = (request.query ?? {}) as LogQuery;
+      const lines = query.lines ? Number(query.lines) : 200;
+
+      return success(
+        await readLogs(
+          runtimeCache,
+          (request.params as { id: string }).id,
+          { lines, filter: query.filter },
+        ),
+      );
     },
   );
 

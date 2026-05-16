@@ -526,6 +526,234 @@ export async function scanProfiles(
   }
 }
 
+export async function importProfile(
+  runtime: RuntimeInfo,
+  request: { path: string; name?: string },
+): Promise<{ profile: ProfileSummary }> {
+  const dirPath = request.path;
+
+  try {
+    await stat(dirPath);
+  } catch {
+    throw new HermesHubCoreError(
+      createError(
+        ApiErrorCode.NotFound,
+        `Directory not found: ${dirPath}`,
+        { path: dirPath },
+        "Check the path and try again.",
+      ),
+    );
+  }
+
+  // Scan as a profile candidate to validate
+  const profile = await scanProfileCandidate(dirPath);
+
+  if (!profile.config.exists && !profile.soul.exists) {
+    throw new HermesHubCoreError(
+      createError(
+        ApiErrorCode.ValidationError,
+        "The directory must contain at least a config.yaml or SOUL.md file.",
+        { path: dirPath },
+        "Select a valid Hermes profile directory.",
+      ),
+    );
+  }
+
+  return { profile };
+}
+
+export async function getGatewayStatus(
+  runtime: RuntimeInfo,
+  profileId: string,
+): Promise<{ status: "running" | "stopped" | "error" | "unknown"; pid?: number; uptime?: string; errorMessage?: string }> {
+  if (!runtime.hermesHome.found || !runtime.hermesHome.path) {
+    return { status: "unknown", errorMessage: "HERMES_HOME not available." };
+  }
+
+  const candidates = await profileCandidatesFromHermesHome(runtime.hermesHome.path);
+  const profilePath = candidates.find((c) => profileIdForPath(c) === profileId);
+
+  if (!profilePath) {
+    return { status: "unknown", errorMessage: "Profile not found." };
+  }
+
+  // Try CLI-based detection
+  if (runtime.hermesCli.found && runtime.hermesCli.path) {
+    try {
+      const result = await execa(runtime.hermesCli.path, ["gateway", "status"], {
+        reject: false,
+        timeout: 5_000,
+      });
+      const output = result.stdout || result.stderr || "";
+
+      if (output.includes("running")) return { status: "running" };
+      if (output.includes("stopped")) return { status: "stopped" };
+      if (output.includes("error")) return { status: "error", errorMessage: output };
+    } catch {
+      // Fall through
+    }
+  }
+
+  return { status: "unknown", errorMessage: "Could not determine gateway status." };
+}
+
+export async function startGateway(
+  runtime: RuntimeInfo,
+  profileId: string,
+): Promise<{ success: boolean; message: string; pid?: number }> {
+  if (!runtime.hermesCli.found || !runtime.hermesCli.path) {
+    return { success: false, message: "Hermes CLI not found." };
+  }
+
+  const candidates = await profileCandidatesFromHermesHome(runtime.hermesHome.path ?? "");
+  const profilePath = candidates.find((c) => profileIdForPath(c) === profileId);
+
+  if (!profilePath) {
+    return { success: false, message: "Profile not found." };
+  }
+
+  try {
+    const result = await execa(runtime.hermesCli.path, ["gateway", "start"], {
+      reject: false,
+      timeout: 15_000,
+    });
+
+    return {
+      success: result.exitCode === 0,
+      message: result.stdout || result.stderr || "Gateway start attempted.",
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function stopGateway(
+  runtime: RuntimeInfo,
+  profileId: string,
+): Promise<{ success: boolean; message: string; pid?: number }> {
+  if (!runtime.hermesCli.found || !runtime.hermesCli.path) {
+    return { success: false, message: "Hermes CLI not found." };
+  }
+
+  try {
+    const result = await execa(runtime.hermesCli.path, ["gateway", "stop"], {
+      reject: false,
+      timeout: 15_000,
+    });
+
+    return {
+      success: result.exitCode === 0,
+      message: result.stdout || result.stderr || "Gateway stop attempted.",
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function restartGateway(
+  runtime: RuntimeInfo,
+  profileId: string,
+): Promise<{ success: boolean; message: string; pid?: number }> {
+  const stopResult = await stopGateway(runtime, profileId);
+
+  if (!stopResult.success) return stopResult;
+
+  return startGateway(runtime, profileId);
+}
+
+export async function readLogs(
+  runtime: RuntimeInfo,
+  profileId: string,
+  options?: { lines?: number; filter?: string },
+): Promise<{ lines: Array<{ timestamp?: string; level?: string; message: string; source?: string }>; totalFiles: number; path: string }> {
+  const maxLines = options?.lines ?? 200;
+
+  if (!runtime.hermesHome.found || !runtime.hermesHome.path) {
+    throw new HermesHubCoreError(
+      createError(ApiErrorCode.HermesHomeNotFound, "HERMES_HOME is not available"),
+    );
+  }
+
+  const candidates = await profileCandidatesFromHermesHome(runtime.hermesHome.path);
+  const profilePath = candidates.find((c) => profileIdForPath(c) === profileId);
+
+  if (!profilePath) {
+    throw new HermesHubCoreError(
+      createError(ApiErrorCode.ProfileNotFound, "Profile not found", { profileId }),
+    );
+  }
+
+  const logsPath = join(profilePath, "logs");
+  let totalFiles = 0;
+  const allLines: Array<{ timestamp?: string; level?: string; message: string; source?: string }> = [];
+
+  try {
+    const entries = await readdir(logsPath, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      totalFiles += 1;
+
+      try {
+        const content = await readFile(join(logsPath, entry.name), "utf8");
+        const fileLines = content.split(/\r?\n/).filter(Boolean);
+
+        for (const line of fileLines) {
+          const parsed = parseLogLine(line);
+
+          if (options?.filter) {
+            const lower = parsed.message.toLowerCase();
+
+            if (!lower.includes(options.filter.toLowerCase())) continue;
+          }
+
+          allLines.push(parsed);
+        }
+      } catch {
+        // Skip unreadable files
+      }
+    }
+  } catch {
+    // Logs directory may not exist
+  }
+
+  // Return last N lines
+  return {
+    lines: allLines.slice(-maxLines),
+    totalFiles,
+    path: logsPath,
+  };
+}
+
+function parseLogLine(raw: string): { timestamp?: string; level?: string; message: string; source?: string } {
+  const tsMatch = raw.match(/^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)/);
+
+  let timestamp: string | undefined;
+  let rest = raw;
+
+  if (tsMatch) {
+    timestamp = tsMatch[1];
+    rest = raw.slice(tsMatch[0].length).trim();
+  }
+
+  const levelMatch = rest.match(/^(ERROR|WARN|WARNING|INFO|DEBUG|TRACE)\s/i);
+
+  let level: string | undefined;
+
+  if (levelMatch) {
+    level = levelMatch[1].toUpperCase();
+    rest = rest.slice(levelMatch[0].length).trim();
+  }
+
+  return { timestamp, level, message: rest, source: undefined };
+}
+
 export function validateYaml(content: string): ValidateFileResponse {
   try {
     parseYaml(content);

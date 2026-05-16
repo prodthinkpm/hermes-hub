@@ -197,3 +197,43 @@ export type CloneProfileResponse = {
   copiedFiles: string[];
   skippedFiles: string[];
 };
+
+export type ImportProfileRequest = {
+  path: string;
+  name?: string;
+};
+
+export type ImportProfileResponse = {
+  profile: ProfileSummary;
+};
+
+export type GatewayStatus = {
+  status: "running" | "stopped" | "error" | "unknown";
+  pid?: number;
+  uptime?: string;
+  errorMessage?: string;
+};
+
+export type GatewayActionResult = {
+  success: boolean;
+  message: string;
+  pid?: number;
+};
+
+export type LogLine = {
+  timestamp?: string;
+  level?: string;
+  message: string;
+  source?: string;
+};
+
+export type LogQuery = {
+  lines?: number;
+  filter?: string;
+};
+
+export type LogsResult = {
+  lines: LogLine[];
+  totalFiles: number;
+  path: string;
+};

@@ -30,9 +30,11 @@ function fileLabel(file: ProfileSummary["config"]) {
 export default function ProfileList({
   onSelect,
   onCreate,
+  onImport,
 }: {
   onSelect: (id: string) => void;
   onCreate?: () => void;
+  onImport?: () => void;
 }) {
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [error, setError] = useState("");
@@ -67,6 +69,7 @@ export default function ProfileList({
         <Typography variant="h2">Profiles</Typography>
         <Button size="small" onClick={() => void load()}>Rescan</Button>
         {onCreate && <Button size="small" variant="contained" onClick={onCreate}>New Profile</Button>}
+        {onImport && <Button size="small" variant="outlined" onClick={onImport}>Import</Button>}
       </Box>
       {profiles.length === 0 ? (
         <Typography color="text.secondary">

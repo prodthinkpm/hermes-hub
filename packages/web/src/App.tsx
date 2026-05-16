@@ -8,6 +8,8 @@ import ConfigEditor from "./components/ConfigEditor";
 import SoulEditor from "./components/SoulEditor";
 import ProfileCreate from "./components/ProfileCreate";
 import ProfileClone from "./components/ProfileClone";
+import ProfileImport from "./components/ProfileImport";
+import LogViewer from "./components/LogViewer";
 
 type View =
   | { name: "list" }
@@ -15,7 +17,9 @@ type View =
   | { name: "config"; profileId: string }
   | { name: "soul"; profileId: string }
   | { name: "create" }
-  | { name: "clone"; profileId: string };
+  | { name: "clone"; profileId: string }
+  | { name: "import" }
+  | { name: "logs"; profileId: string };
 
 export default function App() {
   const [view, setView] = useState<View>({ name: "list" });
@@ -38,6 +42,11 @@ export default function App() {
     (profileId: string) => setView({ name: "clone", profileId }),
     [],
   );
+  const goImport = useCallback(() => setView({ name: "import" }), []);
+  const goLogs = useCallback(
+    (profileId: string) => setView({ name: "logs", profileId }),
+    [],
+  );
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
@@ -48,7 +57,7 @@ export default function App() {
         <RuntimeBanner />
         <Box sx={{ mt: 3 }}>
           {view.name === "list" && (
-            <ProfileList onSelect={goDetail} onCreate={goCreate} />
+            <ProfileList onSelect={goDetail} onCreate={goCreate} onImport={goImport} />
           )}
           {view.name === "detail" && (
             <ProfileDetail
@@ -57,6 +66,7 @@ export default function App() {
               onOpenConfig={() => goConfig(view.profileId)}
               onOpenSoul={() => goSoul(view.profileId)}
               onClone={() => goClone(view.profileId)}
+              onViewLogs={() => goLogs(view.profileId)}
             />
           )}
           {view.name === "config" && (
@@ -76,6 +86,15 @@ export default function App() {
           )}
           {view.name === "clone" && (
             <ProfileClone
+              profileId={view.profileId}
+              onBack={() => goDetail(view.profileId)}
+            />
+          )}
+          {view.name === "import" && (
+            <ProfileImport onBack={goList} />
+          )}
+          {view.name === "logs" && (
+            <LogViewer
               profileId={view.profileId}
               onBack={() => goDetail(view.profileId)}
             />
