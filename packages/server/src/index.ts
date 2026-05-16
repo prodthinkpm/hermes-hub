@@ -117,6 +117,7 @@ export function createHermesHubServer(
         details: {
           message,
         },
+        suggestion: "If this persists, check the Hermes Hub logs or report the issue.",
       }),
     );
   });

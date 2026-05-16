@@ -80,7 +80,7 @@ export function mountRuntimeBanner(container: HTMLElement) {
   rescanButton.textContent = "Rescan";
 
   async function loadRuntime(method: "GET" | "POST" = "GET") {
-    status.textContent = "Hermes Runtime | checking";
+    status.textContent = "Hermes Runtime | Checking...";
 
     try {
       const response = await fetch(
@@ -147,7 +147,7 @@ function renderProfilesTable(
       fileText(profile.soul),
       profile.lastUpdated
         ? new Date(profile.lastUpdated).toLocaleString()
-        : "Unknown",
+        : "—",
       statusText(profile),
     ];
 
@@ -199,7 +199,7 @@ export function mountProfileList(
       }
 
       if (result.data.profiles.length === 0) {
-        content.textContent = "No Hermes profiles found.";
+        content.textContent = "No Hermes profiles found. Create a profile using Hermes CLI, then Rescan.";
         return;
       }
 
@@ -257,7 +257,7 @@ function renderDetail(detail: ProfileDetail) {
 
   const soulEmptyText =
     soul.empty === undefined
-      ? "Unknown"
+      ? "—"
       : soul.empty
         ? "Empty"
         : "Has content";
@@ -317,7 +317,7 @@ function renderDetail(detail: ProfileDetail) {
 
     note.className = "detail-note";
     note.textContent =
-      "SOUL.md does not exist. You can create it in the edit page (coming in a later update).";
+      "SOUL.md does not exist. Open the SOUL editor to create it.";
     wrapper.append(table, note);
   } else {
     wrapper.append(table);
@@ -417,6 +417,20 @@ export function mountProfileDetail(
 
   container.replaceChildren(header, content, actionButtons);
   void loadDetail();
+}
+
+function renderSaveResult(target: HTMLElement, result: WebSaveFileResponse) {
+  if (!result.ok) {
+    target.textContent = `Save failed: ${result.error.message}`;
+    target.style.color = "#cf222e";
+    return;
+  }
+
+  const { backup } = result.data;
+
+  target.textContent =
+    `Saved successfully. Backup: ${backup.path} (${backup.createdAt ? new Date(backup.createdAt).toLocaleString() : ""})`;
+  target.style.color = "#1a7f37";
 }
 
 function renderValidationResult(validation: ValidateFileResponse) {
@@ -561,17 +575,7 @@ export function mountConfigEditor(
       );
       const result = (await response.json()) as WebSaveFileResponse;
 
-      if (!result.ok) {
-        saveResult.textContent = `Save failed: ${result.error.message}`;
-        saveResult.style.color = "#cf222e";
-        return;
-      }
-
-      const { backup } = result.data;
-
-      saveResult.textContent =
-        `Saved successfully. Backup: ${backup.path} (${backup.createdAt ? new Date(backup.createdAt).toLocaleString() : ""})`;
-      saveResult.style.color = "#1a7f37";
+      renderSaveResult(saveResult, result);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       saveResult.textContent = `Save failed: ${message}`;
@@ -610,7 +614,7 @@ export function mountConfigEditor(
 
       if (!file.status.exists) {
         content.textContent =
-          "config.yaml does not exist. You can create it in the edit page (coming in a later update).";
+          "config.yaml does not exist yet. It will be created when you save.";
         return;
       }
 
@@ -678,7 +682,7 @@ export function mountSoulEditor(
   const saveResult = createElement("div", "save-result");
 
   validateButton.type = "button";
-  validateButton.textContent = "Check Content";
+  validateButton.textContent = "Validate Content";
 
   const saveButton = document.createElement("button");
 
@@ -745,17 +749,7 @@ export function mountSoulEditor(
       );
       const result = (await response.json()) as WebSaveFileResponse;
 
-      if (!result.ok) {
-        saveResult.textContent = `Save failed: ${result.error.message}`;
-        saveResult.style.color = "#cf222e";
-        return;
-      }
-
-      const { backup } = result.data;
-
-      saveResult.textContent =
-        `Saved successfully. Backup: ${backup.path} (${backup.createdAt ? new Date(backup.createdAt).toLocaleString() : ""})`;
-      saveResult.style.color = "#1a7f37";
+      renderSaveResult(saveResult, result);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       saveResult.textContent = `Save failed: ${message}`;

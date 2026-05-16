@@ -247,6 +247,7 @@ async function fileStatus(path: string): Promise<ProfileFileStatus> {
               ApiErrorCode.PermissionDenied,
               "File exists but is not readable",
               { path },
+              "Run 'chmod +r' on the file or check file ownership.",
             ),
           }),
     };
@@ -261,7 +262,7 @@ async function fileStatus(path: string): Promise<ProfileFileStatus> {
       error: createError(ApiErrorCode.NotFound, "File was not found", {
         path,
         message,
-      }),
+      }, "Verify the file exists at the reported path."),
     };
   }
 }
@@ -289,20 +290,20 @@ async function scanProfileCandidate(path: string): Promise<ProfileSummary> {
     warnings.push(
       createError(ApiErrorCode.NotFound, "config.yaml was not found", {
         path: config.path,
-      }),
+      }, "This Profile may be incomplete. Create config.yaml to enable editing."),
     );
   } else if (!config.readable) {
-    errors.push(config.error ?? createError(ApiErrorCode.PermissionDenied, "config.yaml is not readable"));
+    errors.push(config.error ?? createError(ApiErrorCode.PermissionDenied, "config.yaml is not readable", undefined, "Fix file permissions so Hermes Hub can read config.yaml."));
   }
 
   if (!soul.exists) {
     warnings.push(
       createError(ApiErrorCode.NotFound, "SOUL.md was not found", {
         path: soul.path,
-      }),
+      }, "This Profile may be incomplete. Create SOUL.md to enable editing."),
     );
   } else if (!soul.readable) {
-    errors.push(soul.error ?? createError(ApiErrorCode.PermissionDenied, "SOUL.md is not readable"));
+    errors.push(soul.error ?? createError(ApiErrorCode.PermissionDenied, "SOUL.md is not readable", undefined, "Fix file permissions so Hermes Hub can read SOUL.md."));
   }
 
   const status: ProfileHealthStatus =
@@ -488,6 +489,8 @@ export async function scanProfiles(
           createError(
             ApiErrorCode.HermesHomeNotFound,
             "HERMES_HOME was not found or is not readable",
+            undefined,
+            "Set the HERMES_HOME environment variable or pass --home to specify the path.",
           ),
       ],
     };
@@ -515,7 +518,7 @@ export async function scanProfiles(
       errors: [
         createError(ApiErrorCode.UnknownError, "Profile scan failed", {
           message,
-        }),
+        }, "Check filesystem permissions and try rescanning."),
       ],
     };
   }
