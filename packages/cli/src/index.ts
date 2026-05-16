@@ -3,11 +3,13 @@
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import { Command } from "commander";
 import open from "open";
 import { createHermesHubServer } from "@hermes-hub/server";
 import type { ApiResponse, HealthCheckData } from "@hermes-hub/shared";
 import { createMockHermesHome } from "@hermes-hub/core";
+import { execSync } from "node:child_process";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8899;
@@ -92,8 +94,54 @@ async function main() {
     .option("--host <host>", "host to bind the local server", DEFAULT_HOST)
     .option("--home <path>", "Hermes home path to use for runtime detection")
     .option("--mock", "create a mock HERMES_HOME for testing")
+    .option("--demo", "alias for --mock (create mock HERMES_HOME for demonstration)")
     .option("--port <port>", "port to bind the local server", parsePort, DEFAULT_PORT)
-    .option("--no-open", "do not open the browser after startup");
+    .option("--no-open", "do not open the browser after startup")
+    .command("doctor")
+    .description("Run environment checks for Hermes Hub")
+    .action(async () => {
+      const version = readPackageVersion();
+      console.log(`Hermes Hub v${version}`);
+      console.log("Running environment checks...\n");
+
+      // Node.js version
+      const nodeVersion = process.version;
+      const nodeMajor = Number(nodeVersion.slice(1).split(".")[0]);
+      console.log(`  Node.js: ${nodeVersion} ${nodeMajor >= 20 ? "✓" : "✗ (need >= 20)"}`);
+
+      // Hermes CLI
+      try {
+        const whichCmd = process.platform === "win32" ? "where" : "which";
+        const hermesPath = execSync(`${whichCmd} hermes`, { encoding: "utf8", timeout: 5_000 }).split("\n")[0]?.trim();
+        if (hermesPath) {
+          try {
+            const ver = execSync(`"${hermesPath}" --version`, { encoding: "utf8", timeout: 5_000 }).trim();
+            console.log(`  Hermes CLI: ${hermesPath} (${ver}) ✓`);
+          } catch {
+            console.log(`  Hermes CLI: ${hermesPath} (version unknown) ⚠`);
+          }
+        } else {
+          console.log("  Hermes CLI: not found (optional) ⚠");
+        }
+      } catch {
+        console.log("  Hermes CLI: not found (optional) ⚠");
+      }
+
+      // HERMES_HOME
+      const hermesHome = process.env.HERMES_HOME || process.argv.find((a) => a.startsWith("--home="))?.split("=")[1] || `${homedir()}/.hermes`;
+      console.log(`  HERMES_HOME: ${hermesHome}`);
+
+      // Default port
+      try {
+        const portAvail = await isPortAvailable(DEFAULT_PORT, DEFAULT_HOST);
+        console.log(`  Port ${DEFAULT_PORT}: ${portAvail ? "available ✓" : "in use ⚠"}`);
+      } catch {
+        console.log(`  Port ${DEFAULT_PORT}: check failed ⚠`);
+      }
+
+      console.log("\nDoctor check complete.");
+      process.exit(0);
+    });
 
   program.parse(process.argv.filter((arg, index) => index <= 1 || arg !== "--"));
 
@@ -101,7 +149,7 @@ async function main() {
 
   let hermesHomeOverride = options.home;
 
-  if (options.mock) {
+  if (options.mock || (options as Record<string, unknown>).demo) {
     const mockPath = await createMockHermesHome();
 
     console.log(`Mock HERMES_HOME created at ${mockPath}`);
