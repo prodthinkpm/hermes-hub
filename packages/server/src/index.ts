@@ -1,5 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import Fastify from "fastify";
 import { cloneProfile, createError, createProfile, detectRuntime, HermesHubCoreError, readEditableFile, readProfile, saveEditableFile, scanProfiles, validateYaml } from "@hermes-hub/core";
 import {
@@ -53,38 +54,15 @@ function failure(error: ApiError): ApiFailure {
   };
 }
 
-const webEntryPath = fileURLToPath(
-  new URL("../../web/dist/index.js", import.meta.url),
-);
+const webDistDir = fileURLToPath(new URL("../../web/dist", import.meta.url));
 
-const indexHtml = `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Hermes Hub</title>
-    <style>
-      body {
-        margin: 0;
-        background: #f7f8f5;
-        color: #20231f;
-        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      }
-      #app {
-        max-width: 1180px;
-        margin: 0 auto;
-        padding: 28px;
-      }
-      button {
-        cursor: pointer;
-      }
-    </style>
-  </head>
-  <body>
-    <main id="app"></main>
-    <script type="module" src="/assets/index.js"></script>
-  </body>
-</html>`;
+async function readWebIndex() {
+  try {
+    return await readFile(join(webDistDir, "index.html"), "utf8");
+  } catch {
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"/><title>Hermes Hub</title></head><body><p>Web bundle not built. Run pnpm build first.</p></body></html>`;
+  }
+}
 
 export function createHermesHubServer(
   options: CreateHermesHubServerOptions = {},
@@ -348,14 +326,30 @@ export function createHermesHubServer(
     },
   );
 
-  app.get("/", async (_request, reply) =>
-    reply.type("text/html; charset=utf-8").send(indexHtml),
-  );
+  app.get("/", async (_request, reply) => {
+    const html = await readWebIndex();
 
-  app.get("/assets/index.js", async (_request, reply) => {
-    const script = await readFile(webEntryPath, "utf8");
+    return reply.type("text/html; charset=utf-8").send(html);
+  });
 
-    return reply.type("application/javascript; charset=utf-8").send(script);
+  app.get("/assets/*", async (request, reply) => {
+    const assetPath = join(webDistDir, "assets", (request.params as { "*": string })["*"]);
+
+    try {
+      const content = await readFile(assetPath);
+
+      if (assetPath.endsWith(".js")) {
+        return reply.type("application/javascript; charset=utf-8").send(content);
+      }
+
+      if (assetPath.endsWith(".css")) {
+        return reply.type("text/css; charset=utf-8").send(content);
+      }
+
+      return reply.send(content);
+    } catch {
+      return reply.status(404).send("Not found");
+    }
   });
 
   return app;
