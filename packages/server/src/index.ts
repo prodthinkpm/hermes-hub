@@ -2,7 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import Fastify from "fastify";
-import { cloneProfile, createError, createProfile, detectRuntime, getGatewayStatus, HermesHubCoreError, importProfile, listBackups, readBackupContent, readEditableFile, readLogs, readProfile, restartGateway, runHealthCheck, saveEditableFile, scanProfiles, startGateway, stopGateway, validateYaml } from "@hermes-hub/core";
+import { cloneProfile, createError, createProfile, detectRuntime, getGatewayStatus, HermesHubCoreError, importProfile, listBackups, readBackupContent, readEditableFile, readLogs, readProfile, restartGateway, restoreBackup, runHealthCheck, saveEditableFile, scanProfiles, startGateway, stopGateway, validateYaml } from "@hermes-hub/core";
 import {
   ApiErrorCode,
   type ApiError,
@@ -535,6 +535,31 @@ export function createHermesHubServer(
         );
       }
       return success({ content });
+    },
+  );
+
+  app.post(
+    "/api/profiles/:id/backups/:backupId/restore",
+    async (request): Promise<ApiResponse<{ restored: string }>> => {
+      const { id, backupId } = request.params as { id: string; backupId: string };
+      const backups = await listBackups(id);
+      const backup = backups.find((b) => b.id === backupId);
+      if (!backup) {
+        throw new HermesHubHttpError(404, createError(ApiErrorCode.NotFound, "Backup not found", { backupId }));
+      }
+
+      const profileDetail = await readProfile(
+        runtimeCache ??= await detectRuntime({ hermesHomeOverride: options.hermesHomeOverride }),
+        id,
+      );
+      if (!profileDetail) {
+        throw new HermesHubHttpError(404, createError(ApiErrorCode.ProfileNotFound, "Profile not found", { profileId: id }));
+      }
+
+      const targetPath = backup.fileName.endsWith("SOUL.md")
+        ? profileDetail.soul.path
+        : profileDetail.config.path;
+      return success(await restoreBackup(backup.backupPath, targetPath));
     },
   );
 

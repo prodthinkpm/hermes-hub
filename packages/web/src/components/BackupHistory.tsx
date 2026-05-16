@@ -24,6 +24,9 @@ export default function BackupHistory({ profileId }: { profileId: string }) {
   const [error, setError] = useState("");
   const [viewContent, setViewContent] = useState<string | null>(null);
   const [viewFileName, setViewFileName] = useState("");
+  const [restoreTarget, setRestoreTarget] = useState<BackupEntry | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreMsg, setRestoreMsg] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -52,6 +55,20 @@ export default function BackupHistory({ profileId }: { profileId: string }) {
     } catch { /* ignore */ }
   };
 
+  const handleRestore = async () => {
+    if (!restoreTarget) return;
+    setRestoring(true);
+    setRestoreMsg("");
+    try {
+      const res = await fetch(`/api/profiles/${encodeURIComponent(profileId)}/backups/${encodeURIComponent(restoreTarget.id)}/restore`, { method: "POST" });
+      const result = await res.json() as { ok: boolean; data?: { restored: string }; error?: { message: string } };
+      if (result.ok) { setRestoreMsg(`Restored: ${result.data!.restored}`); setRestoreTarget(null); void load(); }
+      else setRestoreMsg(result.error!.message);
+    } catch (e) {
+      setRestoreMsg(e instanceof Error ? e.message : String(e));
+    } finally { setRestoring(false); }
+  };
+
   if (loading) return <Skeleton variant="rounded" height={60} />;
   if (error) return <Alert severity="warning">{error}</Alert>;
   if (backups.length === 0) return <Typography variant="body2" color="text.secondary">No backups yet.</Typography>;
@@ -73,6 +90,7 @@ export default function BackupHistory({ profileId }: { profileId: string }) {
             <ListItemSecondaryAction>
               <Chip label={`${(b.sizeBytes / 1024).toFixed(1)} KB`} size="small" variant="outlined" sx={{ mr: 0.5 }} />
               <Button size="small" onClick={() => handleView(b)}>View</Button>
+              <Button size="small" color="warning" onClick={() => setRestoreTarget(b)} sx={{ ml: 0.5 }}>Restore</Button>
             </ListItemSecondaryAction>
           </ListItem>
         ))}
@@ -90,6 +108,26 @@ export default function BackupHistory({ profileId }: { profileId: string }) {
         </DialogContent>
         <DialogActions>
           <Button size="small" onClick={() => setViewContent(null)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      {restoreMsg && <Alert severity={restoreMsg.startsWith("Restored") ? "success" : "error"} sx={{ mt: 1 }}>{restoreMsg}</Alert>}
+      <Dialog open={restoreTarget !== null} onClose={() => { setRestoreTarget(null); setRestoreMsg(""); }}>
+        <DialogTitle>Restore Backup</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            Restore <strong>{restoreTarget?.fileName}</strong> from{" "}
+            {restoreTarget ? new Date(restoreTarget.createdAt).toLocaleString() : ""}?
+          </Typography>
+          <Typography variant="body2" color="warning.main" sx={{ mt: 1 }}>
+            This will overwrite the current file. A backup of the current file will be created before restoring.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button size="small" onClick={() => { setRestoreTarget(null); setRestoreMsg(""); }}>Cancel</Button>
+          <Button size="small" color="warning" variant="contained" onClick={handleRestore} disabled={restoring}>
+            {restoring ? "Restoring..." : "Restore"}
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>

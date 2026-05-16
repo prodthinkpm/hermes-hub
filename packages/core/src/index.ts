@@ -6,7 +6,7 @@ import { basename, dirname, join } from "node:path";
 
 export { createMockHermesHome } from "./mock.js";
 export { runHealthCheck } from "./health.js";
-export { listBackups, readBackupContent } from "./backup.js";
+export { listBackups, readBackupContent, restoreBackup } from "./backup.js";
 import { execa } from "execa";
 import { parse as parseYaml } from "yaml";
 import {
