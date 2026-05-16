@@ -1,12 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
-import { createError, detectRuntime, HermesHubCoreError, readEditableFile, readProfile, saveEditableFile, scanProfiles, validateYaml } from "@hermes-hub/core";
+import { createError, createProfile, detectRuntime, HermesHubCoreError, readEditableFile, readProfile, saveEditableFile, scanProfiles, validateYaml } from "@hermes-hub/core";
 import {
   ApiErrorCode,
   type ApiError,
   type ApiFailure,
   type ApiResponse,
+  type CreateProfileRequest,
+  type CreateProfileResponse,
   type EditableFileResult,
   type HealthCheckData,
   type ProfileDetail,
@@ -156,6 +158,19 @@ export function createHermesHubServer(
 
     return success(await scanProfiles(runtimeCache));
   });
+
+  app.post(
+    "/api/profiles",
+    async (request): Promise<ApiResponse<CreateProfileResponse>> => {
+      runtimeCache ??= await detectRuntime({
+        hermesHomeOverride: options.hermesHomeOverride,
+      });
+
+      const body = (request.body ?? {}) as CreateProfileRequest;
+
+      return success(await createProfile(runtimeCache, body));
+    },
+  );
 
   app.get(
     "/api/profiles/:id",

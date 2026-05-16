@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, open, readdir, readFile, rename, stat, unlink } from "node:fs/promises";
+import { access, copyFile, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
@@ -800,4 +800,104 @@ export async function saveEditableFile(
     backup,
     savedAt: new Date().toISOString(),
   };
+}
+
+const DEFAULT_SOUL_TEMPLATE = `# Identity
+
+You are a helpful Hermes Agent. Respond clearly and concisely.
+
+## Behaviour
+
+- Be accurate and honest
+- When unsure, ask clarifying questions
+- Use tools when they help the user
+`;
+
+function defaultConfig(model?: string, provider?: string, workspace?: string) {
+  return `model:
+  default: ${model ?? "deepseek-v4-flash"}
+  provider: ${provider ?? "deepseek"}
+providers: {}
+fallback_providers: []
+toolsets:
+  - hermes-cli
+agent:
+  max_turns: 90
+workspace: ${workspace ?? "~"}
+`;
+}
+
+export async function createProfile(
+  runtime: RuntimeInfo,
+  request: {
+    name: string;
+    displayName?: string;
+    description?: string;
+    model?: string;
+    provider?: string;
+    workspace?: string;
+    soulContent?: string;
+  },
+): Promise<{ profile: ProfileSummary }> {
+  if (!runtime.hermesHome.found || !runtime.hermesHome.path) {
+    throw new HermesHubCoreError(
+      createError(
+        ApiErrorCode.HermesHomeNotFound,
+        "HERMES_HOME is not available",
+        undefined,
+        "Set HERMES_HOME or pass --home to specify the path.",
+      ),
+    );
+  }
+
+  const profilesDir = join(runtime.hermesHome.path, "profiles");
+  const profilePath = join(profilesDir, request.name);
+
+  // Check for collision
+  try {
+    await stat(profilePath);
+    throw new HermesHubCoreError(
+      createError(
+        ApiErrorCode.ValidationError,
+        `A profile named "${request.name}" already exists.`,
+        { name: request.name },
+        "Choose a different name or remove the existing profile first.",
+      ),
+    );
+  } catch (error) {
+    if (error instanceof HermesHubCoreError) throw error;
+    // ENOENT is expected — directory does not exist yet
+  }
+
+  await mkdir(profilePath, { recursive: true });
+
+  const configContent = defaultConfig(
+    request.model,
+    request.provider,
+    request.workspace,
+  );
+
+  const soulContent = request.soulContent?.trim()
+    ? request.soulContent
+    : DEFAULT_SOUL_TEMPLATE;
+
+  try {
+    await writeFile(join(profilePath, "config.yaml"), configContent, "utf8");
+    await writeFile(join(profilePath, "SOUL.md"), soulContent, "utf8");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    throw new HermesHubCoreError(
+      createError(
+        ApiErrorCode.FileWriteFailed,
+        "Failed to create profile files.",
+        { message },
+        "Check disk space and write permissions on the profiles directory.",
+      ),
+    );
+  }
+
+  const profile = await scanProfileCandidate(profilePath);
+
+  return { profile };
 }

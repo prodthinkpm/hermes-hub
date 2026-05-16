@@ -168,16 +168,29 @@ function renderProfilesTable(
 export function mountProfileList(
   container: HTMLElement,
   onSelect: (profileId: string) => void,
+  onCreate?: () => void,
 ) {
   const header = createElement("div", "section-header");
   const title = document.createElement("h2");
   const refreshButton = document.createElement("button");
+  const createButton = document.createElement("button");
   const content = createElement("div", "profiles-content");
 
   title.textContent = "Profiles";
   refreshButton.type = "button";
   refreshButton.textContent = "Rescan Profiles";
-  header.append(title, refreshButton);
+
+  createButton.type = "button";
+  createButton.textContent = "New Profile";
+  createButton.style.marginLeft = "8px";
+
+  if (onCreate) {
+    createButton.addEventListener("click", onCreate);
+  } else {
+    createButton.disabled = true;
+  }
+
+  header.append(title, refreshButton, createButton);
 
   async function loadProfiles() {
     content.textContent = "Scanning profiles...";
@@ -821,6 +834,240 @@ export function mountSoulEditor(
   void loadSoul();
 }
 
+export function mountProfileCreate(
+  container: HTMLElement,
+  onBack: () => void,
+) {
+  const header = createElement("div", "section-header");
+  const title = document.createElement("h2");
+  const backButton = document.createElement("button");
+
+  title.textContent = "Create Profile";
+  backButton.type = "button";
+  backButton.textContent = "Back to Profiles";
+  backButton.addEventListener("click", onBack);
+  header.append(title, backButton);
+
+  const content = createElement("div", "editor-content");
+  const stepBar = createElement("div", "step-bar");
+  const navBar = createElement("div", "editor-actions");
+  const resultMsg = createElement("div", "save-result");
+
+  let step = 1;
+  const state = {
+    name: "",
+    displayName: "",
+    description: "",
+    model: "",
+    provider: "",
+    workspace: "",
+    soulContent: "",
+  };
+
+  // Step 1: Basic info fields
+  function createNameInput() {
+    const label = document.createElement("label");
+    label.textContent = "Profile Name *";
+    label.style.display = "block";
+    label.style.marginTop = "12px";
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = "e.g. my-agent";
+    input.style.width = "100%";
+    input.style.padding = "6px";
+    input.style.boxSizing = "border-box";
+    input.value = state.name;
+    input.addEventListener("input", () => { state.name = input.value.trim(); });
+
+    const displayLabel = document.createElement("label");
+    displayLabel.textContent = "Display Name";
+    displayLabel.style.display = "block";
+    displayLabel.style.marginTop = "12px";
+
+    const displayInput = document.createElement("input");
+    displayInput.type = "text";
+    displayInput.placeholder = "e.g. My Agent";
+    displayInput.style.width = "100%";
+    displayInput.style.padding = "6px";
+    displayInput.style.boxSizing = "border-box";
+    displayInput.value = state.displayName;
+    displayInput.addEventListener("input", () => { state.displayName = displayInput.value.trim(); });
+
+    const descLabel = document.createElement("label");
+    descLabel.textContent = "Description";
+    descLabel.style.display = "block";
+    descLabel.style.marginTop = "12px";
+
+    const descInput = document.createElement("input");
+    descInput.type = "text";
+    descInput.placeholder = "Short description";
+    descInput.style.width = "100%";
+    descInput.style.padding = "6px";
+    descInput.style.boxSizing = "border-box";
+    descInput.value = state.description;
+    descInput.addEventListener("input", () => { state.description = descInput.value.trim(); });
+
+    const wrapper = createElement("div");
+    wrapper.append(label, input, displayLabel, displayInput, descLabel, descInput);
+    return wrapper;
+  }
+
+  // Step 2: Model/provider/workspace
+  function createModelInputs() {
+    const modelLabel = document.createElement("label");
+    modelLabel.textContent = "Model";
+    modelLabel.style.display = "block";
+    modelLabel.style.marginTop = "12px";
+
+    const modelInput = document.createElement("input");
+    modelInput.type = "text";
+    modelInput.placeholder = "e.g. deepseek-v4-pro";
+    modelInput.style.width = "100%";
+    modelInput.style.padding = "6px";
+    modelInput.style.boxSizing = "border-box";
+    modelInput.value = state.model;
+    modelInput.addEventListener("input", () => { state.model = modelInput.value.trim(); });
+
+    const providerLabel = document.createElement("label");
+    providerLabel.textContent = "Provider";
+    providerLabel.style.display = "block";
+    providerLabel.style.marginTop = "12px";
+
+    const providerInput = document.createElement("input");
+    providerInput.type = "text";
+    providerInput.placeholder = "e.g. deepseek";
+    providerInput.style.width = "100%";
+    providerInput.style.padding = "6px";
+    providerInput.style.boxSizing = "border-box";
+    providerInput.value = state.provider;
+    providerInput.addEventListener("input", () => { state.provider = providerInput.value.trim(); });
+
+    const workspaceLabel = document.createElement("label");
+    workspaceLabel.textContent = "Workspace";
+    workspaceLabel.style.display = "block";
+    workspaceLabel.style.marginTop = "12px";
+
+    const workspaceInput = document.createElement("input");
+    workspaceInput.type = "text";
+    workspaceInput.placeholder = "e.g. ~/projects/my-agent";
+    workspaceInput.style.width = "100%";
+    workspaceInput.style.padding = "6px";
+    workspaceInput.style.boxSizing = "border-box";
+    workspaceInput.value = state.workspace;
+    workspaceInput.addEventListener("input", () => { state.workspace = workspaceInput.value.trim(); });
+
+    const wrapper = createElement("div");
+    wrapper.append(modelLabel, modelInput, providerLabel, providerInput, workspaceLabel, workspaceInput);
+    return wrapper;
+  }
+
+  // Step 3: SOUL content (optional)
+  function createSoulInput() {
+    const note = document.createElement("p");
+    note.style.fontSize = "12px";
+    note.style.color = "#656d76";
+    note.textContent = "Optional. A default template will be used if left empty.";
+
+    const textarea = document.createElement("textarea");
+    textarea.rows = 15;
+    textarea.style.width = "100%";
+    textarea.style.fontFamily = "ui-monospace, SFMono-Regular, monospace";
+    textarea.style.fontSize = "13px";
+    textarea.style.padding = "12px";
+    textarea.style.boxSizing = "border-box";
+    textarea.placeholder = "# Identity\n\nYou are a helpful Hermes Agent...";
+    textarea.value = state.soulContent;
+    textarea.addEventListener("input", () => { state.soulContent = textarea.value; });
+
+    const wrapper = createElement("div");
+    wrapper.append(note, textarea);
+    return wrapper;
+  }
+
+  function renderStep() {
+    stepBar.textContent = `Step ${step} of 3`;
+
+    if (step === 1) {
+      content.replaceChildren(createNameInput());
+    } else if (step === 2) {
+      content.replaceChildren(createModelInputs());
+    } else {
+      content.replaceChildren(createSoulInput());
+    }
+
+    navBar.replaceChildren();
+
+    if (step > 1) {
+      const prevButton = document.createElement("button");
+      prevButton.type = "button";
+      prevButton.textContent = "Back";
+      prevButton.addEventListener("click", () => { step -= 1; renderStep(); });
+      navBar.append(prevButton);
+    }
+
+    if (step < 3) {
+      const nextButton = document.createElement("button");
+      nextButton.type = "button";
+      nextButton.textContent = "Next";
+      nextButton.addEventListener("click", () => {
+        if (step === 1 && !state.name) {
+          resultMsg.textContent = "Profile Name is required.";
+          resultMsg.style.color = "#cf222e";
+          return;
+        }
+        step += 1;
+        resultMsg.textContent = "";
+        renderStep();
+      });
+      navBar.append(nextButton);
+    } else {
+      const createButton = document.createElement("button");
+      createButton.type = "button";
+      createButton.textContent = "Create Profile";
+      createButton.style.fontWeight = "bold";
+      createButton.addEventListener("click", async () => {
+        if (!state.name) {
+          resultMsg.textContent = "Profile Name is required.";
+          resultMsg.style.color = "#cf222e";
+          return;
+        }
+
+        resultMsg.textContent = "Creating...";
+
+        try {
+          const response = await fetch("/api/profiles", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(state),
+          });
+          const result = await response.json();
+
+          if (!result.ok) {
+            resultMsg.textContent = `Failed: ${result.error.message}`;
+            resultMsg.style.color = "#cf222e";
+            return;
+          }
+
+          resultMsg.textContent = `Profile "${state.name}" created. Back to list to see it.`;
+          resultMsg.style.color = "#1a7f37";
+
+          // Disable create button after success
+          createButton.disabled = true;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          resultMsg.textContent = `Failed: ${message}`;
+          resultMsg.style.color = "#cf222e";
+        }
+      });
+      navBar.append(createButton);
+    }
+  }
+
+  container.replaceChildren(header, stepBar, content, navBar, resultMsg);
+  renderStep();
+}
+
 export function mountHermesHubApp(container: HTMLElement) {
   const title = document.createElement("h1");
   const runtime = createElement("section", "runtime-banner");
@@ -831,6 +1078,8 @@ export function mountHermesHubApp(container: HTMLElement) {
   function showList() {
     mountProfileList(content, (profileId) => {
       showDetail(profileId);
+    }, () => {
+      showCreateProfile();
     });
   }
 
@@ -857,6 +1106,12 @@ export function mountHermesHubApp(container: HTMLElement) {
   function showSoulEditor(profileId: string) {
     mountSoulEditor(content, profileId, () => {
       showDetail(profileId);
+    });
+  }
+
+  function showCreateProfile() {
+    mountProfileCreate(content, () => {
+      showList();
     });
   }
 

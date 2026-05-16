@@ -167,3 +167,17 @@ export type ProfilesListResponse = {
   warnings: ApiError[];
   errors: ApiError[];
 };
+
+export type CreateProfileRequest = {
+  name: string;
+  displayName?: string;
+  description?: string;
+  model?: string;
+  provider?: string;
+  workspace?: string;
+  soulContent?: string;
+};
+
+export type CreateProfileResponse = {
+  profile: ProfileSummary;
+};
