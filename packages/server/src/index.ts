@@ -2,7 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import Fastify from "fastify";
-import { cloneProfile, createError, createProfile, detectRuntime, getGatewayStatus, HermesHubCoreError, importProfile, readEditableFile, readLogs, readProfile, restartGateway, saveEditableFile, scanProfiles, startGateway, stopGateway, validateYaml } from "@hermes-hub/core";
+import { cloneProfile, createError, createProfile, detectRuntime, getGatewayStatus, HermesHubCoreError, importProfile, readEditableFile, readLogs, readProfile, restartGateway, runHealthCheck, saveEditableFile, scanProfiles, startGateway, stopGateway, validateYaml } from "@hermes-hub/core";
 import {
   ApiErrorCode,
   type ApiError,
@@ -16,6 +16,7 @@ import {
   type GatewayActionResult,
   type GatewayStatus,
   type HealthCheckData,
+  type HealthCheckResult,
   type ImportProfileRequest,
   type ImportProfileResponse,
   type LogQuery,
@@ -426,6 +427,82 @@ export function createHermesHubServer(
           content ?? "",
         ),
       );
+    },
+  );
+
+  app.get(
+    "/api/profiles/:id/health",
+    async (request): Promise<ApiResponse<HealthCheckResult>> => {
+      runtimeCache ??= await detectRuntime({
+        hermesHomeOverride: options.hermesHomeOverride,
+      });
+
+      if (!runtimeCache.hermesHome.found || !runtimeCache.hermesHome.path) {
+        throw new HermesHubHttpError(
+          422,
+          createError(
+            ApiErrorCode.HermesHomeNotFound,
+            "HERMES_HOME is not available",
+            undefined,
+            "Set HERMES_HOME or pass --home to specify the path.",
+          ),
+        );
+      }
+
+      const profileId = (request.params as { id: string }).id;
+      const detail = await readProfile(runtimeCache, profileId);
+
+      if (!detail) {
+        throw new HermesHubHttpError(
+          404,
+          createError(
+            ApiErrorCode.ProfileNotFound,
+            "Profile not found",
+            { profileId },
+            "Check that the profile exists under the current HERMES_HOME.",
+          ),
+        );
+      }
+
+      return success(await runHealthCheck(runtimeCache, profileId, detail.hermesHome));
+    },
+  );
+
+  app.post(
+    "/api/profiles/:id/health/run",
+    async (request): Promise<ApiResponse<HealthCheckResult>> => {
+      runtimeCache = await detectRuntime({
+        hermesHomeOverride: options.hermesHomeOverride,
+      });
+
+      if (!runtimeCache.hermesHome.found || !runtimeCache.hermesHome.path) {
+        throw new HermesHubHttpError(
+          422,
+          createError(
+            ApiErrorCode.HermesHomeNotFound,
+            "HERMES_HOME is not available",
+            undefined,
+            "Set HERMES_HOME or pass --home to specify the path.",
+          ),
+        );
+      }
+
+      const profileId = (request.params as { id: string }).id;
+      const detail = await readProfile(runtimeCache, profileId);
+
+      if (!detail) {
+        throw new HermesHubHttpError(
+          404,
+          createError(
+            ApiErrorCode.ProfileNotFound,
+            "Profile not found",
+            { profileId },
+            "Check that the profile exists under the current HERMES_HOME.",
+          ),
+        );
+      }
+
+      return success(await runHealthCheck(runtimeCache, profileId, detail.hermesHome));
     },
   );
 

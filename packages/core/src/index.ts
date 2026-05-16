@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
 export { createMockHermesHome } from "./mock.js";
+export { runHealthCheck } from "./health.js";
 import { execa } from "execa";
 import { parse as parseYaml } from "yaml";
 import {

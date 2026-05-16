@@ -237,3 +237,44 @@ export type LogsResult = {
   totalFiles: number;
   path: string;
 };
+
+export type HealthCheckSeverity = "info" | "warning" | "error";
+
+export type HealthCheckStatus = "pass" | "warn" | "fail" | "unknown";
+
+export type HealthCheckCategory =
+  | "cli"
+  | "home"
+  | "profile_dir"
+  | "config"
+  | "soul"
+  | "gateway"
+  | "logs"
+  | "backup"
+  | "security";
+
+export type HealthCheckItem = {
+  checkId: string;
+  name: string;
+  category: HealthCheckCategory;
+  severity: HealthCheckSeverity;
+  status: HealthCheckStatus;
+  message: string;
+  suggestion?: string;
+  details?: Record<string, unknown>;
+};
+
+export type HealthCheckSummary = {
+  pass: number;
+  warn: number;
+  fail: number;
+  unknown: number;
+  total: number;
+};
+
+export type HealthCheckResult = {
+  profileId: string;
+  checkedAt: string;
+  items: HealthCheckItem[];
+  summary: HealthCheckSummary;
+};
