@@ -2,9 +2,11 @@
 
 Multi-Agent Profile Hub for Hermes — a local visual management center for creating, configuring, and maintaining multiple Hermes Agent Profiles.
 
-## MVP Status
+## Current Status
 
-This is the v0.1 MVP. It provides a **minimum safe edit loop** for existing Hermes Agent Profiles:
+Hermes Hub is currently aligned with the **PRD v0.8 Post-MVP roadmap**. The codebase has completed the MVP safe edit loop, the PR9-PR11 hardening pass, P1 Profile creation/cloning/import, and P2 Gateway/logs basics.
+
+Current implemented scope:
 
 - Start the local dashboard via `npx hermes-hub`
 - Detect the Hermes CLI and HERMES_HOME on your machine
@@ -15,14 +17,51 @@ This is the v0.1 MVP. It provides a **minimum safe edit loop** for existing Herm
 - Every save automatically backs up the previous file
 - Atomic writes — a failed save never corrupts the original file
 - Secret redaction detection prevents accidentally overwriting real keys with placeholders
+- Create a new Profile with a basic wizard
+- Clone an existing Profile while skipping sensitive files by default
+- Import an existing Profile directory for inspection
+- Check Gateway status and trigger start / stop / restart through the Hermes CLI
+- View recent Profile log lines without real-time streaming
+
+The next planned stage is **P3: Doctor / Health Check**.
 
 ## Quick Start
+
+### Published Package
 
 ```bash
 npx hermes-hub
 ```
 
-This starts the local server and opens the dashboard in your browser at `http://127.0.0.1:8899`.
+This is the intended end-user entry point once the package is published. It starts the local server and opens the dashboard in your browser at `http://127.0.0.1:8899`.
+
+### Local Development From Source
+
+```bash
+pnpm install
+pnpm build
+pnpm --filter @hermes-hub/cli dev -- --no-open
+```
+
+This builds the web bundle and server packages, starts the local CLI entry point, and leaves the browser closed. Open the printed URL manually, usually `http://127.0.0.1:8899`.
+
+Use a real Hermes home:
+
+```bash
+pnpm --filter @hermes-hub/cli dev -- --home ~/.hermes --no-open
+```
+
+Use demo data without touching a real Hermes home:
+
+```bash
+pnpm --filter @hermes-hub/cli dev -- --mock --no-open
+```
+
+After a full `pnpm build`, you can also run the compiled CLI directly:
+
+```bash
+node packages/cli/dist/index.js --mock --no-open
+```
 
 ### Prerequisites
 
@@ -37,14 +76,17 @@ This starts the local server and opens the dashboard in your browser at `http://
 | `--port <port>` | `8899` | Port to bind the local server. If occupied, the next available port is used automatically. |
 | `--host <host>` | `127.0.0.1` | Host to bind the server. Passing `0.0.0.0` prints a security warning. |
 | `--home <path>` | auto-detected | Override the HERMES_HOME path used for Profile scanning. |
+| `--mock` | `false` | Create and use a temporary mock HERMES_HOME for demos and local testing. |
 | `--no-open` | `false` | Start the server without opening the browser. |
 
-### Install Globally (Alternative)
+### Install Globally
 
 ```bash
 npm install -g hermes-hub
 hermes-hub
 ```
+
+This is also intended for the published package flow.
 
 ## HERMES_HOME Detection
 
@@ -83,49 +125,38 @@ The raw editor shows real file content and includes a security notice reminding 
 
 By default the server listens **only** on `127.0.0.1`. Passing `--host 0.0.0.0` prints a warning in the terminal.
 
-## MVP Features
+## PRD v0.8 Roadmap Status
 
-| Feature | Status |
+| Stage | Status |
 |---|---|
-| `npx hermes-hub` local startup | Done |
-| Hermes CLI detection | Done |
-| HERMES_HOME detection (4 sources) | Done |
-| Profile scanning (single home + profiles/* subdirectories) | Done |
-| Profile list with file status | Done |
-| Profile detail (config summary, permissions, timestamps) | Done |
-| config.yaml view / edit / YAML validation | Done |
-| SOUL.md view / edit / content check | Done |
-| Save-with-backup (timestamped, per-profile) | Done |
-| Atomic write (tmp + fsync + rename) | Done |
-| Secret redaction placeholder detection | Done |
-| Empty SOUL.md block | Done |
-| Invalid YAML block | Done |
-| Unified API error format | Done |
+| PR1-PR8: MVP safe edit loop | Done |
+| PR9: README and manual checklist | Done |
+| PR10: errors, empty states, loading states, save feedback | Done |
+| PR11: mock HERMES_HOME | Done |
+| PR12: Create Profile wizard | Done |
+| PR13: Clone Profile | Done |
+| PR14: Import Profile | Done |
+| PR15: Gateway status | Done |
+| PR16: Gateway start / stop / restart | Done |
+| PR17: Basic Logs viewer | Done |
+| PR18-PR20: Doctor / Health Check | Planned next |
+| PR21-PR26: Diff, backup history, rollback, Monaco, form config, SOUL templates | Planned |
+| PR27-PR30: MCP / Skills / Cron | Planned |
+| PR31-PR35: npm/npx Alpha release | Planned |
 
-## Known Limitations
+## Current Limitations
 
-- No Profile creation wizard — you must already have Profiles under HERMES_HOME
-- No Profile cloning or deletion
-- No Gateway start / stop / restart
-- No real-time log streaming
-- No Health Center / Doctor integration
-- No Skills, MCP, or Cron management
-- No template system
-- No config version history UI or rollback
-- No Diff view
-- No Monaco editor (plain textarea)
-- No SQLite database (in-memory scan per request)
-- No multi-user support
-- No remote node management
-- macOS / Linux primary; Windows best-effort
-
-## Not Yet Supported
-
-The following capabilities are planned for v0.2 and v0.3:
-
-**v0.2:** Create Profile wizard, Profile clone, Gateway status & start/stop, Log viewer, Doctor integration
-
-**v0.3:** Skills / MCP / Cron management, Template system, Config version history & rollback UI, Health Center
+- Gateway commands are lightweight wrappers around the Hermes CLI and should be validated against real multi-Profile Gateway behavior before wider use.
+- Logs viewer reads recent lines from Profile log files; it does not provide WebSocket or live tail streaming.
+- Import currently validates a directory as a Profile; persistent registry-style import behavior is not yet implemented.
+- No Doctor / Health Center yet.
+- No Skills, MCP, or Cron management yet.
+- No template marketplace or advanced template system.
+- No config version history UI, rollback UI, or Diff view yet.
+- No Monaco editor yet; editors use textareas.
+- No SQLite database; Profile state is scanned from files on demand.
+- No multi-user, remote node, or team permission model.
+- macOS / Linux are primary; Windows is best-effort.
 
 ## Manual Verification Checklist
 
@@ -139,6 +170,15 @@ pnpm build
 pnpm --filter @hermes-hub/cli dev -- --no-open
 ```
 
+Useful local commands:
+
+```bash
+pnpm --filter @hermes-hub/web dev
+pnpm --filter @hermes-hub/web build
+pnpm --filter @hermes-hub/server build
+pnpm --filter @hermes-hub/cli dev -- --mock --no-open
+```
+
 ### Package Structure
 
 ```
@@ -146,7 +186,7 @@ hermes-hub
 ├── packages
 │   ├── cli        # CLI entry point (commander)
 │   ├── server     # Fastify API server
-│   ├── web        # Browser UI (vanilla TypeScript DOM)
+│   ├── web        # Browser UI (React + Material UI)
 │   ├── core       # Runtime adapter & business logic
 │   └── shared     # Shared types & API contracts
 ├── package.json
@@ -160,7 +200,7 @@ hermes-hub
 |---|---|
 | CLI | Node.js + TypeScript + Commander |
 | Server | Fastify |
-| Frontend | TypeScript + vanilla DOM (no framework) |
+| Frontend | React + TypeScript + Material UI + Vite |
 | YAML | `yaml` package |
 | Process | `execa` |
 
