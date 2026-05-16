@@ -278,3 +278,14 @@ export type HealthCheckResult = {
   items: HealthCheckItem[];
   summary: HealthCheckSummary;
 };
+
+export type BackupEntry = {
+  id: string;
+  profileId: string;
+  fileName: string;
+  fileType: "config" | "soul";
+  backupPath: string;
+  originalPath: string;
+  createdAt: string;
+  sizeBytes: number;
+};

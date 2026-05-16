@@ -2,7 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import Fastify from "fastify";
-import { cloneProfile, createError, createProfile, detectRuntime, getGatewayStatus, HermesHubCoreError, importProfile, readEditableFile, readLogs, readProfile, restartGateway, runHealthCheck, saveEditableFile, scanProfiles, startGateway, stopGateway, validateYaml } from "@hermes-hub/core";
+import { cloneProfile, createError, createProfile, detectRuntime, getGatewayStatus, HermesHubCoreError, importProfile, listBackups, readBackupContent, readEditableFile, readLogs, readProfile, restartGateway, runHealthCheck, saveEditableFile, scanProfiles, startGateway, stopGateway, validateYaml } from "@hermes-hub/core";
 import {
   ApiErrorCode,
   type ApiError,
@@ -15,6 +15,7 @@ import {
   type EditableFileResult,
   type GatewayActionResult,
   type GatewayStatus,
+  type BackupEntry,
   type HealthCheckData,
   type HealthCheckResult,
   type ImportProfileRequest,
@@ -503,6 +504,37 @@ export function createHermesHubServer(
       }
 
       return success(await runHealthCheck(runtimeCache, profileId, detail.hermesHome));
+    },
+  );
+
+  app.get(
+    "/api/profiles/:id/backups",
+    async (request): Promise<ApiResponse<BackupEntry[]>> => {
+      const profileId = (request.params as { id: string }).id;
+      return success(await listBackups(profileId));
+    },
+  );
+
+  app.get(
+    "/api/profiles/:id/backups/:backupId",
+    async (request): Promise<ApiResponse<{ content: string }>> => {
+      const { id, backupId } = request.params as { id: string; backupId: string };
+      const backups = await listBackups(id);
+      const backup = backups.find((b) => b.id === backupId);
+      if (!backup) {
+        throw new HermesHubHttpError(
+          404,
+          createError(ApiErrorCode.NotFound, "Backup not found", { backupId }),
+        );
+      }
+      const content = await readBackupContent(backup.backupPath);
+      if (content === null) {
+        throw new HermesHubHttpError(
+          404,
+          createError(ApiErrorCode.FileReadFailed, "Failed to read backup file", { path: backup.backupPath }),
+        );
+      }
+      return success({ content });
     },
   );
 

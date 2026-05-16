@@ -6,6 +6,7 @@ import Typography from "@mui/material/Typography";
 import Alert from "@mui/material/Alert";
 import Chip from "@mui/material/Chip";
 import DiffPreview from "./DiffPreview";
+import BackupHistory from "./BackupHistory";
 import type { EditableFileResult, ValidateFileResponse, SaveFileResponse } from "@hermes-hub/shared";
 
 type WebFileResponse = { ok: true; data: EditableFileResult } | { ok: false; error: { message: string } };
@@ -131,6 +132,11 @@ export default function ConfigEditor({ profileId, onBack }: { profileId: string;
       <Alert severity="info" sx={{ fontSize: 12 }}>
         Security notice: This editor shows real file content. Do not paste it into untrusted environments.
       </Alert>
+
+      <Box sx={{ mt: 2 }}>
+        <Typography variant="body2" fontWeight={600} sx={{ mb: 0.5 }}>Backup History</Typography>
+        <BackupHistory profileId={profileId} />
+      </Box>
 
       <DiffPreview
         open={diffOpen}

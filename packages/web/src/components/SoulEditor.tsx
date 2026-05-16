@@ -6,6 +6,7 @@ import Typography from "@mui/material/Typography";
 import Alert from "@mui/material/Alert";
 import Chip from "@mui/material/Chip";
 import DiffPreview from "./DiffPreview";
+import BackupHistory from "./BackupHistory";
 import type { EditableFileResult, ValidateFileResponse, SaveFileResponse } from "@hermes-hub/shared";
 
 type WebFileResponse = { ok: true; data: EditableFileResult } | { ok: false; error: { message: string } };
@@ -137,6 +138,11 @@ export default function SoulEditor({ profileId, onBack }: { profileId: string; o
       <Typography variant="body2" color="text.secondary">
         Note: Empty SOUL.md files are not recommended and will be blocked on save.
       </Typography>
+
+      <Box sx={{ mt: 2 }}>
+        <Typography variant="body2" fontWeight={600} sx={{ mb: 0.5 }}>Backup History</Typography>
+        <BackupHistory profileId={profileId} />
+      </Box>
 
       <DiffPreview
         open={diffOpen}
