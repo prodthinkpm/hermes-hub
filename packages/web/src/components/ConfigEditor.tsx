@@ -5,6 +5,7 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import Alert from "@mui/material/Alert";
 import Chip from "@mui/material/Chip";
+import MonacoEditor from "./MonacoEditor";
 import DiffPreview from "./DiffPreview";
 import BackupHistory from "./BackupHistory";
 import type { EditableFileResult, ValidateFileResponse, SaveFileResponse } from "@hermes-hub/shared";
@@ -99,16 +100,14 @@ export default function ConfigEditor({ profileId, onBack }: { profileId: string;
         <Chip label={`${readable ? "R" : "No R"} / ${writable ? "W" : "No W"}`} size="small" />
       </Box>
 
-      <TextField
-        multiline
-        fullWidth
-        minRows={24}
-        maxRows={36}
-        value={content}
-        onChange={(e) => setContent(e.target.value)}
-        sx={{ fontFamily: "monospace", fontSize: 13, mb: 1 }}
-        inputProps={{ style: { fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: 13 } }}
-      />
+      <Box sx={{ mb: 1 }}>
+        <MonacoEditor
+          language="yaml"
+          value={content}
+          onChange={setContent}
+          readOnly={!writable}
+        />
+      </Box>
 
       <Box sx={{ display: "flex", gap: 1, mb: 1 }}>
         <Button variant="outlined" size="small" onClick={handleValidate}>Validate YAML</Button>

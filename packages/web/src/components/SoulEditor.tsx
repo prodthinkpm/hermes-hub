@@ -5,6 +5,7 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import Alert from "@mui/material/Alert";
 import Chip from "@mui/material/Chip";
+import MonacoEditor from "./MonacoEditor";
 import DiffPreview from "./DiffPreview";
 import BackupHistory from "./BackupHistory";
 import type { EditableFileResult, ValidateFileResponse, SaveFileResponse } from "@hermes-hub/shared";
@@ -110,16 +111,13 @@ export default function SoulEditor({ profileId, onBack }: { profileId: string; o
         </Alert>
       )}
 
-      <TextField
-        multiline
-        fullWidth
-        minRows={24}
-        maxRows={36}
-        value={content}
-        onChange={(e) => setContent(e.target.value)}
-        inputProps={{ style: { fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: 13 } }}
-        sx={{ mb: 1 }}
-      />
+      <Box sx={{ mb: 1 }}>
+        <MonacoEditor
+          language="markdown"
+          value={content}
+          onChange={setContent}
+        />
+      </Box>
 
       <Box sx={{ display: "flex", gap: 1, mb: 1 }}>
         <Button variant="outlined" size="small" onClick={handleCheck}>Validate Content</Button>
