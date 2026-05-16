@@ -901,3 +901,107 @@ export async function createProfile(
 
   return { profile };
 }
+
+export async function cloneProfile(
+  runtime: RuntimeInfo,
+  request: {
+    sourceProfileId: string;
+    newName: string;
+    copyEnv?: boolean;
+    copyAuth?: boolean;
+    copyMemories?: boolean;
+    copySessions?: boolean;
+    copyLogs?: boolean;
+  },
+): Promise<{ profile: ProfileSummary; copiedFiles: string[]; skippedFiles: string[] }> {
+  if (!runtime.hermesHome.found || !runtime.hermesHome.path) {
+    throw new HermesHubCoreError(
+      createError(
+        ApiErrorCode.HermesHomeNotFound,
+        "HERMES_HOME is not available",
+      ),
+    );
+  }
+
+  const candidates = await profileCandidatesFromHermesHome(
+    runtime.hermesHome.path,
+  );
+  const sourcePath = candidates.find(
+    (c) => profileIdForPath(c) === request.sourceProfileId,
+  );
+
+  if (!sourcePath) {
+    throw new HermesHubCoreError(
+      createError(
+        ApiErrorCode.ProfileNotFound,
+        "Source profile not found",
+        { profileId: request.sourceProfileId },
+      ),
+    );
+  }
+
+  const profilesDir = join(runtime.hermesHome.path, "profiles");
+  const targetPath = join(profilesDir, request.newName);
+
+  try {
+    await stat(targetPath);
+    throw new HermesHubCoreError(
+      createError(
+        ApiErrorCode.ValidationError,
+        `A profile named "${request.newName}" already exists.`,
+        { name: request.newName },
+        "Choose a different name.",
+      ),
+    );
+  } catch (error) {
+    if (error instanceof HermesHubCoreError) throw error;
+    // ENOENT is expected
+  }
+
+  await mkdir(targetPath, { recursive: true });
+
+  const copiedFiles: string[] = [];
+  const skippedFiles: string[] = [];
+
+  const safeCopy = ["config.yaml", "SOUL.md"];
+  const optionalCopy: Record<string, boolean | undefined> = {
+    ".env": request.copyEnv,
+    "auth.json": request.copyAuth,
+    "memories": request.copyMemories,
+    "sessions": request.copySessions,
+    "logs": request.copyLogs,
+  };
+
+  for (const file of safeCopy) {
+    const src = join(sourcePath, file);
+
+    try {
+      await stat(src);
+      await copyFile(src, join(targetPath, file));
+      copiedFiles.push(file);
+    } catch {
+      skippedFiles.push(file);
+    }
+  }
+
+  for (const [entry, shouldCopy] of Object.entries(optionalCopy)) {
+    if (!shouldCopy) {
+      skippedFiles.push(entry);
+      continue;
+    }
+
+    const src = join(sourcePath, entry);
+
+    try {
+      await stat(src);
+      // Directories need recursive copy; skip for MVP
+      skippedFiles.push(`${entry} (skipped — directory copy not supported)`);
+    } catch {
+      skippedFiles.push(entry);
+    }
+  }
+
+  const profile = await scanProfileCandidate(targetPath);
+
+  return { profile, copiedFiles, skippedFiles };
+}

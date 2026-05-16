@@ -181,3 +181,19 @@ export type CreateProfileRequest = {
 export type CreateProfileResponse = {
   profile: ProfileSummary;
 };
+
+export type CloneProfileRequest = {
+  sourceProfileId: string;
+  newName: string;
+  copyEnv?: boolean;
+  copyAuth?: boolean;
+  copyMemories?: boolean;
+  copySessions?: boolean;
+  copyLogs?: boolean;
+};
+
+export type CloneProfileResponse = {
+  profile: ProfileSummary;
+  copiedFiles: string[];
+  skippedFiles: string[];
+};

@@ -371,6 +371,7 @@ export function mountProfileDetail(
   onBack: () => void,
   onOpenConfig?: () => void,
   onOpenSoul?: () => void,
+  onClone?: () => void,
 ) {
   const header = createElement("div", "section-header");
   const title = document.createElement("h2");
@@ -385,6 +386,7 @@ export function mountProfileDetail(
   const actionButtons = createElement("div", "detail-actions");
   const openConfigButton = document.createElement("button");
   const openSoulButton = document.createElement("button");
+  const cloneButton = document.createElement("button");
 
   openConfigButton.type = "button";
   openConfigButton.textContent = "Open Config";
@@ -406,7 +408,17 @@ export function mountProfileDetail(
     openSoulButton.textContent = "Open SOUL (unavailable)";
   }
 
-  actionButtons.append(openConfigButton, openSoulButton);
+  cloneButton.type = "button";
+  cloneButton.textContent = "Clone";
+
+  if (onClone) {
+    cloneButton.addEventListener("click", onClone);
+  } else {
+    cloneButton.disabled = true;
+    cloneButton.textContent = "Clone (unavailable)";
+  }
+
+  actionButtons.append(openConfigButton, openSoulButton, cloneButton);
   header.append(title, backButton);
 
   async function loadDetail() {
@@ -1068,6 +1080,96 @@ export function mountProfileCreate(
   renderStep();
 }
 
+export function mountProfileClone(
+  container: HTMLElement,
+  profileId: string,
+  profileName: string,
+  onBack: () => void,
+) {
+  const header = createElement("div", "section-header");
+  const title = document.createElement("h2");
+  const backButton = document.createElement("button");
+
+  title.textContent = "Clone Profile";
+  backButton.type = "button";
+  backButton.textContent = "Back to Detail";
+  backButton.addEventListener("click", onBack);
+  header.append(title, backButton);
+
+  const content = createElement("div", "editor-content");
+  const resultMsg = createElement("div", "save-result");
+
+  const sourceLabel = document.createElement("p");
+  sourceLabel.textContent = `Source: ${profileName}`;
+
+  const nameLabel = document.createElement("label");
+  nameLabel.textContent = "New Profile Name";
+  nameLabel.style.display = "block";
+  nameLabel.style.marginTop = "12px";
+
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.value = `${profileName}-clone`;
+  nameInput.style.width = "100%";
+  nameInput.style.padding = "6px";
+  nameInput.style.boxSizing = "border-box";
+
+  const optionsNote = document.createElement("p");
+  optionsNote.style.fontSize = "12px";
+  optionsNote.style.color = "#656d76";
+  optionsNote.style.marginTop = "16px";
+  optionsNote.textContent =
+    "By default, only config.yaml and SOUL.md are copied. Sensitive files (.env, auth.json) are never copied.";
+
+  const cloneButton = document.createElement("button");
+  cloneButton.type = "button";
+  cloneButton.textContent = "Clone";
+  cloneButton.style.fontWeight = "bold";
+  cloneButton.style.marginTop = "12px";
+
+  cloneButton.addEventListener("click", async () => {
+    const newName = nameInput.value.trim();
+
+    if (!newName) {
+      resultMsg.textContent = "Profile name is required.";
+      resultMsg.style.color = "#cf222e";
+      return;
+    }
+
+    resultMsg.textContent = "Cloning...";
+
+    try {
+      const response = await fetch(
+        `/api/profiles/${encodeURIComponent(profileId)}/clone`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ newName }),
+        },
+      );
+      const result = await response.json();
+
+      if (!result.ok) {
+        resultMsg.textContent = `Clone failed: ${result.error.message}`;
+        resultMsg.style.color = "#cf222e";
+        return;
+      }
+
+      resultMsg.textContent =
+        `Cloned as "${newName}". Copied: ${result.data.copiedFiles.join(", ") || "none"}. Back to list to see it.`;
+      resultMsg.style.color = "#1a7f37";
+      cloneButton.disabled = true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      resultMsg.textContent = `Clone failed: ${message}`;
+      resultMsg.style.color = "#cf222e";
+    }
+  });
+
+  content.append(sourceLabel, nameLabel, nameInput, optionsNote, cloneButton);
+  container.replaceChildren(header, content, resultMsg);
+}
+
 export function mountHermesHubApp(container: HTMLElement) {
   const title = document.createElement("h1");
   const runtime = createElement("section", "runtime-banner");
@@ -1084,6 +1186,8 @@ export function mountHermesHubApp(container: HTMLElement) {
   }
 
   function showDetail(profileId: string) {
+    let profileName = "";
+
     mountProfileDetail(
       content,
       profileId,
@@ -1094,7 +1198,22 @@ export function mountHermesHubApp(container: HTMLElement) {
       () => {
         showSoulEditor(profileId);
       },
+      () => {
+        showCloneProfile(profileId, profileName);
+      },
     );
+
+    // Fetch the profile name for the clone button
+    fetch(`/api/profiles/${encodeURIComponent(profileId)}`)
+      .then((r) => r.json())
+      .then((result: WebProfileDetailResponse) => {
+        if (result.ok) profileName = result.data.name;
+      })
+      .catch(() => {});
+  }
+
+  function showCloneProfile(profileId: string, name: string) {
+    mountProfileClone(content, profileId, name, () => showDetail(profileId));
   }
 
   function showConfigEditor(profileId: string) {
