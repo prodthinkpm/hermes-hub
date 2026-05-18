@@ -1254,13 +1254,20 @@ export function startServer(opts: ServerOptions): ReturnType<typeof createServer
   if (!resolvedToken) {
     resolvedToken = randomUUID()
     setMetadataValue(db, 'registration_token', resolvedToken)
-    console.log(`[hermes-hub] Generated registration token: ${resolvedToken}`)
+    console.log(`[hermes-hub] Registration token: ${resolvedToken}`)
   }
 
   // Seed default admin user if users table is empty
   const adminInfo = seedDefaultAdmin(db)
   if (adminInfo) {
     console.log(`[hermes-hub] Default admin created: ${adminInfo.username} / ${adminInfo.password} -- CHANGE PASSWORD IMMEDIATELY`)
+  } else {
+    // Always show current user count on startup
+    const allUsers = getAllUsers(db)
+    if (allUsers.length > 0) {
+      const roleSummary = allUsers.map((u: DbUserRow) => `${u.username}(${u.role})`).join(', ')
+      console.log(`[hermes-hub] ${allUsers.length} user(s): ${roleSummary}`)
+    }
   }
 
   const server = createServer((req, res) => {
