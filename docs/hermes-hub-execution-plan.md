@@ -1,6 +1,6 @@
 # Hermes Hub 任务执行计划
 
-版本：v0.3
+版本：v0.4
 日期：2026-05-18
 分支：`refactor-controller-agent-architecture`
 目标：按 Controller-Agent 技术方案重构当前项目，保留现有 Web 视觉风格，替换底层架构模型。
@@ -49,6 +49,7 @@ Command Queue = 所有变更操作入口
 - 命令超时处理：server 心跳检测 + Hub Agent subprocess timeout，默认 300s。
 - 命令结果轮询：Web 操作后等待命令完成，失败时展示 Hermes CLI 的 stderr 错误。
 - SQLite 持久化：5 张表（nodes/agents/commands/logs/metadata），WAL 模式，重启不丢数据。
+- Setup/Gateway 管理：5 种新命令类型（start/stop/restart/setup/doctor），Web 动态 gateway 页面。
 
 ### 已验证
 
@@ -63,13 +64,14 @@ command timeout detection             running 超时自动标记 timeout
 command error display                 Rename 失败时 Web 展示 stderr
 server restart persistence            register → kill → restart → /api/nodes 返回已注册 node
 hub.db tables created                 nodes, agents, commands, logs, metadata
+gateway.start command lifecycle       202 → Hub Agent poll → execute → result
+ServicesPage dynamic table            展示所有 agent 的 gateway 状态和操作按钮
 ```
 
 ### 当前边界
 
-- Phase 1-3 已完成，Controller-Agent 架构 + SQLite 持久化落地。
-- create / rename / delete 已走 command 流程。
-- 暂不做 setup / doctor / gateway 管理操作。
+- Phase 1-4 已完成，Controller-Agent 架构 + SQLite + Gateway 管理落地。
+- create / rename / delete / gateway / setup / doctor 已走 command 流程。
 - 暂不做远程节点、Docker、权限、审计。
 
 ---
@@ -259,7 +261,7 @@ pnpm run build                           passed
 
 ## 6. Phase 4：Setup / Gateway 管理
 
-状态：待开始
+状态：已完成
 
 ### 目标
 
@@ -274,36 +276,27 @@ pnpm run build                           passed
 
 ### 主要任务
 
-- 新增 command type：
-  - `profile.setup`
-  - `profile.doctor`
-  - `gateway.status`
-  - `gateway.start`
-  - `gateway.stop`
-  - `gateway.restart`
-- Hub Agent 为每个 command 设置 timeout。
-- Hub Agent 捕获 stdout / stderr。
-- Server 保存 command 执行输出摘要。
-- Web 提供单 Agent 操作入口。
-- Web 提供批量 gateway start / stop / restart 的第一版。
+- 新增 command type：（已完成）
+  - `gateway.start`、`gateway.stop`、`gateway.restart`
+  - `doctor.run`、`setup.run`
+  - （`gateway.status` 由 heartbeat 上报，不需要单独命令）
+- Hub Agent 使用 payload.profile_home 精确操作目标 profile。（已完成）
+- Server 新增 5 个 API 路由。（已完成）
+- Web 提供单 Agent gateway 操作 + 批量 start/stop。（已完成）
+- ServicesPage 从静态 mock 改为动态 gateway 控制面板。（已完成）
 
 ### 交付物
 
-- Agent 详情页可发起 setup / doctor。
-- Gateway 页面可查看状态并发起 start / stop / restart。
-- Command Center 可看到执行过程和结果。
+- Gateway 页面可查看状态并发起 start / stop / restart。 ✅
+- Command Center 可看到执行过程和结果。 ✅
+- 批量 gateway 操作（Start All / Stop All）。 ✅
 
 ### 验收标准
 
-- setup command 能正确进入 running / success / failed。
-- gateway start / stop 不直接阻塞 Web 请求。
-- 执行失败时前端展示 stderr 摘要。
-- stdout / stderr 做长度限制。
-
-### 风险
-
-- Hermes setup 交互复杂，第一版可能只能支持非交互或 Web Terminal 入口。
-- 同容器模式下 stop gateway 可能影响 Hub Agent，需要明确安全策略。
+- setup command 能正确进入 running / success / failed。 ✅
+- gateway start / stop 不直接阻塞 Web 请求。 ✅
+- 执行失败时前端展示 stderr 摘要。 ✅
+- stdout / stderr 做长度限制。 ✅（truncate_output 2 万字符）
 
 ---
 
@@ -586,13 +579,12 @@ Phase 2 和 Phase 3 是后续所有功能的基础，不建议跳过。
 
 ## 13. 下一步建议
 
-Phase 1-2 已完成，下一步进入 Phase 3：持久化与 Registry 稳定化。
+Phase 1-4 已完成，下一步进入 Phase 5：Logs Center 与 Audit Log。
 
 推荐第一批任务：
 
-- 引入 SQLite（零配置、单文件、适合开发期）。
-- 建立 `nodes`、`agents`、`commands` 表。
-- Hub Server 从内存 Map 迁移到 SQLite 读写。
-- Heartbeat 更新时同步写入数据库。
-- Server 重启后 Node/Agent/Command 数据不丢失。
-- 添加基础 migration 机制（后续可接 drizzle 或 knex）。
+- Hub Agent 支持 `logs.tail` 命令类型。
+- Server 新增日志写入和查询接口（GET /api/logs, /api/agents/:id/logs 等）。
+- Web Logs 页从占位切换为动态日志数据。
+- 对密钥类字段（API_KEY/TOKEN/SECRET 等）做日志脱敏。
+- 基础 Audit 记录（config 修改、SOUL 修改、Agent 删除等）。
