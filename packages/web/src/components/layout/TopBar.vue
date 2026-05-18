@@ -1,17 +1,39 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
 import { useHubStore } from '@/stores/hub'
+import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import UiButton from '@/components/ui/UiButton.vue'
 
 const router = useRouter()
 const hubStore = useHubStore()
+const authStore = useAuthStore()
 const themeStore = useThemeStore()
+
+function doLogout() {
+  authStore.logout()
+  router.push('/login')
+}
 </script>
 
 <template>
   <header class="sticky top-0 z-10 flex h-[78px] items-center justify-between border-b border-snow/10 bg-abyss/80 px-7 backdrop-blur-[20px] max-[760px]:px-3.5">
-    <div class="flex items-center gap-2.5 ml-auto">
+    <div class="flex items-center gap-3 ml-auto">
+      <span v-if="authStore.isAuthenticated" class="text-[12px] text-slate mr-1 max-[760px]:hidden">
+        {{ authStore.user?.username }}
+        <span class="text-[10px] text-slate/60">({{ authStore.user?.role }})</span>
+      </span>
+      <button
+        class="inline-flex size-9 items-center justify-center rounded-md border border-snow/10 bg-snow/[.055] text-parchment transition hover:bg-signal/[.12] hover:text-signal"
+        title="Sign out"
+        @click="doLogout"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+          <polyline points="16 17 21 12 16 7" />
+          <line x1="21" y1="12" x2="9" y2="12" />
+        </svg>
+      </button>
       <button
         class="inline-flex size-9 items-center justify-center rounded-md border border-snow/10 bg-snow/[.055] text-parchment transition hover:bg-snow/[.09] hover:text-snow"
         :title="themeStore.mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'"

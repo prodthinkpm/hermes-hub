@@ -296,6 +296,14 @@ function runMigrations(db: Database.Database): void {
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id            TEXT PRIMARY KEY,
+      username      TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      role          TEXT NOT NULL DEFAULT 'viewer',
+      created_at    TEXT NOT NULL
+    );
   `)
 
   // Seed the command counter if not present (restart-safe).
@@ -430,6 +438,61 @@ export function setMetadataValue(db: Database.Database, key: string, value: stri
   db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').run(key, value)
 }
 
+// -- Users (Phase 9) --
+
+export interface DbUserRow {
+  id: string
+  username: string
+  password_hash: string
+  role: string
+  created_at: string
+}
+
+export function createUser(db: Database.Database, id: string, username: string, passwordHash: string, role: string): DbUserRow {
+  const row: DbUserRow = { id, username, password_hash: passwordHash, role, created_at: new Date().toISOString() }
+  db.prepare(
+    'INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(row.id, row.username, row.password_hash, row.role, row.created_at)
+  return row
+}
+
+export function getUserByUsername(db: Database.Database, username: string): DbUserRow | undefined {
+  return db.prepare('SELECT * FROM users WHERE username = ?').get(username) as DbUserRow | undefined
+}
+
+export function getUserById(db: Database.Database, id: string): DbUserRow | undefined {
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(id) as DbUserRow | undefined
+}
+
+export function getAllUsers(db: Database.Database): DbUserRow[] {
+  return db.prepare('SELECT * FROM users ORDER BY created_at ASC').all() as DbUserRow[]
+}
+
+export function updateUser(db: Database.Database, id: string, fields: Partial<Pick<DbUserRow, 'username' | 'password_hash' | 'role'>>): DbUserRow | undefined {
+  const existing = getUserById(db, id)
+  if (!existing) return undefined
+  const merged = { ...existing, ...fields }
+  db.prepare(
+    'UPDATE users SET username = ?, password_hash = ?, role = ? WHERE id = ?'
+  ).run(merged.username, merged.password_hash, merged.role, id)
+  return merged
+}
+
+export function deleteUser(db: Database.Database, id: string): void {
+  db.prepare('DELETE FROM users WHERE id = ?').run(id)
+}
+
+export function seedDefaultAdmin(db: Database.Database): { username: string; password: string } | null {
+  const rows = db.prepare('SELECT COUNT(*) AS count FROM users').get() as { count: number }
+  if (rows.count > 0) return null
+  const { randomBytes, scryptSync } = require('node:crypto') as typeof import('node:crypto')
+  const password = 'admin'
+  const salt = randomBytes(16).toString('hex')
+  const hash = scryptSync(password, salt, 64).toString('hex')
+  createUser(db, randomBytes(8).toString('hex'), 'admin', `${salt}:${hash}`, 'admin')
+  return { username: 'admin', password }
+}
+
 // -- Commands --
 
 export function getCommand(db: Database.Database, id: string): HubCommand | undefined {
@@ -518,12 +581,18 @@ function isWriteType(type: string): boolean {
 
 // 日志脱敏规则：匹配常见密钥格式，替换为 '***REDACTED***'
 const SECRET_PATTERNS: [RegExp, string][] = [
-  // env key=secret 格式
-  [/(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|AUTH[_-]?TOKEN)\s*[=:]\s*\S+/gi, '$1=***REDACTED***'],
-  // OpenAI / Anthropic API key 格式
+  // env key=secret（捕获 key 名，脱敏 value）
+  [/((?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|AUTH[_-]?TOKEN)\s*[=:]\s*)\S+/gi, '$1***REDACTED***'],
+  // OpenAI / Anthropic API key
   [/sk-[a-zA-Z0-9_-]{20,}/g, '***REDACTED***'],
   // Bearer token
   [/Bearer\s+[a-zA-Z0-9\-_.]+/gi, 'Bearer ***REDACTED***'],
+  // AWS access key (AKIA...)
+  [/AKIA[0-9A-Z]{16}/g, '***REDACTED***'],
+  // Generic cloud credential prefixes
+  [/[A-Z0-9_]{4,}(?:_KEY|_TOKEN|_SECRET|_PASSWORD)\s*=\s*\S+/gi, '***REDACTED***'],
+  // PEM 私钥块
+  [/-----BEGIN\s*(?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[^-]*-----END\s*(?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/gs, '***REDACTED***'],
 ]
 
 export function sanitizeMessage(message: string): string {

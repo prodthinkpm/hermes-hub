@@ -12,6 +12,14 @@ export type {
   AgentApiStatus,
 } from '@hermes-hub/protocol'
 
+export type {
+  HubUser,
+  UserRole,
+  LoginRequest,
+  LoginResponse,
+  AuthStatusResponse,
+} from '@hermes-hub/protocol'
+
 export interface ProfileRow {
   id: string
   kind: ProfileKind

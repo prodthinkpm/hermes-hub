@@ -1,4 +1,5 @@
 import type { HermesApiResponse, HubCommand, HubNode, LogEntry, ManagedAgent, ProfileRow } from './types'
+import type { HubUser, LoginResponse, AuthStatusResponse } from '@hermes-hub/protocol'
 
 export interface HubConfig {
   paths: string[]
@@ -28,6 +29,28 @@ export interface RenameProfileResult {
 export class HermesApiClient {
   constructor(private baseUrl: string = '') {}
 
+  private authToken: string | null = null
+
+  setAuthToken(token: string | null): void {
+    this.authToken = token
+  }
+
+  clearAuthToken(): void {
+    this.authToken = null
+  }
+
+  getAuthToken(): string | null {
+    return this.authToken
+  }
+
+  private authHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {}
+    if (this.authToken) {
+      headers['Authorization'] = `Bearer ${this.authToken}`
+    }
+    return headers
+  }
+
   private parseEnvelope<T>(payload: unknown): HermesApiResponse<T> {
     if (payload && typeof payload === 'object' && 'ok' in payload) {
       const envelope = payload as HermesApiResponse<T>
@@ -50,8 +73,9 @@ export class HermesApiClient {
   private async get<T>(path: string): Promise<HermesApiResponse<T>> {
     try {
       const res = await fetch(`${this.baseUrl}${path}`, {
-        headers: { Accept: 'application/json' },
+        headers: { ...this.authHeaders(), Accept: 'application/json' },
       })
+      if (res.status === 401) { this.clearAuthToken() }
       if (!res.ok) {
         return this.parseErrorResponse(res)
       }
@@ -80,9 +104,10 @@ export class HermesApiClient {
     try {
       const res = await fetch(`${this.baseUrl}${path}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        headers: { ...this.authHeaders(), 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify(body),
       })
+      if (res.status === 401) { this.clearAuthToken() }
       if (!res.ok) {
         return this.parseErrorResponse(res)
       }
@@ -97,9 +122,10 @@ export class HermesApiClient {
     try {
       const res = await fetch(`${this.baseUrl}${path}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        headers: { ...this.authHeaders(), 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify(body),
       })
+      if (res.status === 401) { this.clearAuthToken() }
       if (!res.ok) {
         return this.parseErrorResponse(res)
       }
@@ -114,8 +140,9 @@ export class HermesApiClient {
     try {
       const res = await fetch(`${this.baseUrl}${path}`, {
         method: 'DELETE',
-        headers: { Accept: 'application/json' },
+        headers: { ...this.authHeaders(), Accept: 'application/json' },
       })
+      if (res.status === 401) { this.clearAuthToken() }
       if (!res.ok) {
         return this.parseErrorResponse(res)
       }
@@ -156,6 +183,19 @@ export class HermesApiClient {
 
   async getRegistrationToken(): Promise<HermesApiResponse<{ token: string; enabled: boolean }>> {
     return this.get<{ token: string; enabled: boolean }>('/api/settings/registration-token')
+  }
+
+  // Auth methods (Phase 9)
+  async login(username: string, password: string): Promise<HermesApiResponse<LoginResponse>> {
+    return this.post<LoginResponse>('/api/auth/login', { username, password })
+  }
+
+  async getAuthStatus(): Promise<HermesApiResponse<AuthStatusResponse>> {
+    return this.get<AuthStatusResponse>('/api/auth/status')
+  }
+
+  async changePassword(newPassword: string): Promise<HermesApiResponse<{ message: string }>> {
+    return this.post<{ message: string }>('/api/auth/change-password', { newPassword })
   }
 
   async listAgents(): Promise<HermesApiResponse<ManagedAgent[]>> {

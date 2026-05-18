@@ -18,9 +18,31 @@ export const router = createRouter({
     { path: '/nodes/:id', name: 'nodeDetail' satisfies RouteKey, component: () => import('@/pages/NodeDetailPage.vue') },
     { path: '/profile', redirect: '/profiles' },
     { path: '/context', redirect: '/profiles' },
+    { path: '/login', name: 'login' satisfies RouteKey, component: () => import('@/pages/LoginPage.vue') },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
   scrollBehavior() {
     return { top: 0, behavior: 'smooth' }
   },
+})
+
+// Auth guard (Phase 9)
+router.beforeEach(async (to) => {
+  const { useAuthStore } = await import('@/stores/auth')
+  const authStore = useAuthStore()
+
+  // 已登录访问 /login → 重定向到首页
+  if (to.name === 'login' && authStore.isAuthenticated) {
+    return '/'
+  }
+
+  // 未登录访问非 /login 页面 → 重定向到登录页
+  if (to.name !== 'login' && !authStore.isAuthenticated) {
+    // 尝试恢复会话
+    const restored = await authStore.checkStatus()
+    if (restored) return true
+    return { path: '/login', query: { redirect: to.fullPath } }
+  }
+
+  return true
 })

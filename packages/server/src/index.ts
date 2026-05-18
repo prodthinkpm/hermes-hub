@@ -1,8 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { existsSync, readFileSync } from 'node:fs'
 import { extname, resolve } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
 import type {
+  AuthStatusResponse,
   CommandResultRequest,
   CommandType,
   CreateCommandRequest,
@@ -38,6 +39,14 @@ import {
   insertLog,
   getMetadataValue,
   setMetadataValue,
+  createUser,
+  getUserByUsername,
+  getUserById,
+  getAllUsers,
+  updateUser,
+  deleteUser,
+  seedDefaultAdmin,
+  type DbUserRow,
 } from './database.js'
 
 export interface ServerOptions {
@@ -399,6 +408,78 @@ function profileCompat(agent: ManagedAgent) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// JWT 认证工具（Phase 9，零依赖，纯 node:crypto）
+// ---------------------------------------------------------------------------
+
+function jwtSecret(): string {
+  return resolvedToken ? `jwt_${resolvedToken}` : `jwt_${randomBytes(32).toString('hex')}`
+}
+
+function signJwt(payload: Record<string, unknown>): string {
+  const secret = jwtSecret()
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')
+  const body = Buffer.from(JSON.stringify({ ...payload, iat: Math.floor(Date.now() / 1000) })).toString('base64url')
+  const signature = createHmac('sha256', secret).update(`${header}.${body}`).digest('base64url')
+  return `${header}.${body}.${signature}`
+}
+
+function verifyJwt(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split('.')
+    if (parts.length !== 3) return null
+    const secret = jwtSecret()
+    const expected = createHmac('sha256', secret).update(`${parts[0]}.${parts[1]}`).digest('base64url')
+    if (expected.length !== parts[2].length || !timingSafeEqual(Buffer.from(expected), Buffer.from(parts[2]))) {
+      return null
+    }
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'))
+    return payload as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+function hashPassword(password: string): string {
+  const salt = randomBytes(16).toString('hex')
+  const hash = scryptSync(password, salt, 64).toString('hex')
+  return `${salt}:${hash}`
+}
+
+function verifyPassword(password: string, stored: string): boolean {
+  try {
+    const [salt, hash] = stored.split(':')
+    const derived = scryptSync(password, salt, 64).toString('hex')
+    return hash.length === derived.length && timingSafeEqual(Buffer.from(hash), Buffer.from(derived))
+  } catch {
+    return false
+  }
+}
+
+function roleLevel(role: string): number {
+  switch (role) {
+    case 'admin': return 2
+    case 'operator': return 1
+    default: return 0
+  }
+}
+
+function extractJwtFromRequest(req: IncomingMessage): string | null {
+  const auth = req.headers.authorization
+  if (!auth || !auth.startsWith('Bearer ')) return null
+  return auth.slice(7)
+}
+
+function authenticateRequest(req: IncomingMessage): DbUserRow | null {
+  const token = extractJwtFromRequest(req)
+  if (!token) return null
+  const payload = verifyJwt(token)
+  if (!payload || typeof payload.sub !== 'string') return null
+  // 注意：这里不查数据库，仅凭 JWT 中的 sub 字段重建轻量上下文
+  // 实际查库在需要完整 user 信息的端点中调用 getUserById
+  return { id: payload.sub, username: (payload.username as string) ?? '', password_hash: '', role: (payload.role as string) ?? 'viewer', created_at: '' }
+}
+
 async function handleHubAgentApi(
   path: string,
   method: string,
@@ -577,6 +658,8 @@ async function handlePublicApi(
   res: ServerResponse,
   db: Database.Database
 ): Promise<boolean> {
+  // ---- 公开端点（无需 JWT）----
+
   if (path === '/api/health') {
     if (method !== 'GET') {
       jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
@@ -586,12 +669,93 @@ async function handlePublicApi(
     return true
   }
 
+  // Auth 端点
+  if (path === '/api/auth/login' || path === '/api/auth/login/') {
+    if (method !== 'POST') {
+      jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
+      return true
+    }
+    let body: unknown
+    try { body = await readJsonBody(req) } catch {
+      jsonReply(res, 400, { ok: false, error: 'Invalid JSON body' })
+      return true
+    }
+    if (!isObject(body) || typeof body.username !== 'string' || typeof body.password !== 'string') {
+      jsonReply(res, 400, { ok: false, error: 'username and password are required' })
+      return true
+    }
+    const user = getUserByUsername(db, body.username)
+    if (!user || !verifyPassword(body.password, user.password_hash)) {
+      jsonReply(res, 401, { ok: false, error: 'Invalid username or password' })
+      return true
+    }
+    const token = signJwt({ sub: user.id, username: user.username, role: user.role })
+    jsonReply(res, 200, { ok: true, token, user: { id: user.id, username: user.username, role: user.role, createdAt: user.created_at } })
+    return true
+  }
+
+  if (path === '/api/auth/status' || path === '/api/auth/status/') {
+    if (method !== 'GET') {
+      jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
+      return true
+    }
+    const authUser = authenticateRequest(req)
+    if (!authUser) {
+      const status: AuthStatusResponse = { authenticated: false }
+      jsonReply(res, 200, { ok: true, data: status })
+      return true
+    }
+    const fullUser = getUserById(db, authUser.id)
+    const status: AuthStatusResponse = {
+      authenticated: true,
+      user: fullUser ? { id: fullUser.id, username: fullUser.username, role: fullUser.role as 'admin' | 'operator' | 'viewer', createdAt: fullUser.created_at } : undefined,
+    }
+    jsonReply(res, 200, { ok: true, data: status })
+    return true
+  }
+
+  // ---- 所有其他 /api/* 端点需要 JWT 鉴权 ----
+
+  const authUser = authenticateRequest(req)
+  if (!authUser) {
+    jsonReply(res, 401, { ok: false, error: 'Authentication required' })
+    return true
+  }
+  const userRole = roleLevel(authUser.role)
+
+  // 修改密码（需要鉴权但不检查角色）
+  if (path === '/api/auth/change-password' || path === '/api/auth/change-password/') {
+    if (method !== 'POST') {
+      jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
+      return true
+    }
+    let body: unknown
+    try { body = await readJsonBody(req) } catch {
+      jsonReply(res, 400, { ok: false, error: 'Invalid JSON body' })
+      return true
+    }
+    if (!isObject(body) || typeof body.newPassword !== 'string' || !body.newPassword) {
+      jsonReply(res, 400, { ok: false, error: 'newPassword is required' })
+      return true
+    }
+    const hash = hashPassword(body.newPassword)
+    updateUser(db, authUser.id, { password_hash: hash })
+    jsonReply(res, 200, { ok: true, data: { message: 'Password changed' } })
+    return true
+  }
+
+  // ---- 受保护的业务端点 ----
+
   if (path === '/api/commands' || path === '/api/commands/') {
     if (method === 'GET') {
       jsonReply(res, 200, { ok: true, data: getAllCommands(db) })
       return true
     }
     if (method === 'POST') {
+      if (userRole < 1) {
+        jsonReply(res, 403, { ok: false, error: 'Operator role required to create commands' })
+        return true
+      }
       let body: unknown
       try {
         body = await readJsonBody(req)
@@ -656,6 +820,10 @@ async function handlePublicApi(
     }
 
     if (method === 'PUT') {
+      if (userRole < 2) {
+        jsonReply(res, 403, { ok: false, error: 'Admin role required to manage nodes' })
+        return true
+      }
       let body: unknown
       try { body = await readJsonBody(req) } catch {
         jsonReply(res, 400, { ok: false, error: 'Invalid JSON body' })
@@ -686,6 +854,10 @@ async function handlePublicApi(
     }
 
     if (method === 'DELETE') {
+      if (userRole < 2) {
+        jsonReply(res, 403, { ok: false, error: 'Admin role required to delete nodes' })
+        return true
+      }
       const node = getNode(db, nodeId)
       if (!node) {
         jsonReply(res, 404, { ok: false, error: `Node '${nodeId}' not found` })
@@ -732,6 +904,10 @@ async function handlePublicApi(
 
   if (path === '/api/profiles' || path === '/api/profiles/') {
     if (method === 'POST') {
+      if (userRole < 1) {
+        jsonReply(res, 403, { ok: false, error: 'Operator role required to create agents' })
+        return true
+      }
       let body: unknown
       try {
         body = await readJsonBody(req)
@@ -1016,6 +1192,10 @@ async function handlePublicApi(
       jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
       return true
     }
+    if (userRole < 2) {
+      jsonReply(res, 403, { ok: false, error: 'Admin role required' })
+      return true
+    }
     jsonReply(res, 200, { ok: true, data: { token: resolvedToken ?? '', enabled: Boolean(resolvedToken) } })
     return true
   }
@@ -1075,6 +1255,12 @@ export function startServer(opts: ServerOptions): ReturnType<typeof createServer
     resolvedToken = randomUUID()
     setMetadataValue(db, 'registration_token', resolvedToken)
     console.log(`[hermes-hub] Generated registration token: ${resolvedToken}`)
+  }
+
+  // Seed default admin user if users table is empty
+  const adminInfo = seedDefaultAdmin(db)
+  if (adminInfo) {
+    console.log(`[hermes-hub] Default admin created: ${adminInfo.username} / ${adminInfo.password} -- CHANGE PASSWORD IMMEDIATELY`)
   }
 
   const server = createServer((req, res) => {

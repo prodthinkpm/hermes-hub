@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { RouterLink, useRoute } from 'vue-router'
 import { useHubStore } from '@/stores/hub'
+import { useAuthStore } from '@/stores/auth'
 import { navItems } from '@/data/navigation'
 import type { RouteKey } from '@/types/hub'
 
 const route = useRoute()
 const hubStore = useHubStore()
+const authStore = useAuthStore()
 
 function isActive(key: RouteKey): boolean {
   if (key === 'profiles') return ['profiles', 'profile', 'profileLogs', 'create'].includes(String(route.name))
@@ -39,17 +41,20 @@ function isActive(key: RouteKey): boolean {
     </nav>
 
     <div class="mt-auto rounded-md border border-snow/10 bg-snow/[.045] p-[15px] max-[1180px]:hidden">
+      <div v-if="authStore.isAuthenticated" class="mb-3 flex items-center justify-between">
+        <span class="text-xs text-slate">User</span>
+        <span class="text-[13px] font-bold text-snow">{{ authStore.user?.username }} <span class="text-[11px] text-slate">({{ authStore.user?.role }})</span></span>
+      </div>
       <div class="flex items-center justify-between">
-        <span class="text-xs text-slate">HermesHub 状态</span>
+        <span class="text-xs text-slate">Hub Status</span>
         <span class="inline-flex items-center gap-1.5 text-[13px] font-bold text-signal">
           <span class="size-2 rounded-full bg-signal shadow-[0_0_0_4px_rgba(0,217,146,.12)]"></span>
           {{ hubStore.hubStatus }}
         </span>
       </div>
       <div class="mt-3 flex items-center justify-between">
-        <span class="text-xs text-slate">版本号</span>
+        <span class="text-xs text-slate">Version</span>
         <span class="text-[13px] font-bold text-snow">{{ hubStore.hubVersion }}</span>
-
       </div>
     </div>
   </aside>

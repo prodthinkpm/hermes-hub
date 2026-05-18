@@ -1,6 +1,6 @@
 # Hermes Hub 任务执行计划
 
-版本：v0.8
+版本：v0.9
 日期：2026-05-18
 分支：`refactor-controller-agent-architecture`
 目标：按 Controller-Agent 技术方案重构当前项目，保留现有 Web 视觉风格，替换底层架构模型。
@@ -54,6 +54,7 @@ Command Queue = 所有变更操作入口
 - Config/SOUL/Env 管理：8 种新命令类型，异步文件读写 + 写入备份，Env 只展示 key 不展示 value。
 - Hub Agent 安装与部署：`init` 子命令（平台标准路径配置生成）、`service` 子命令（systemd/launchd/schtasks 服务管理）、`--config` 配置文件加载（CLI > env > config > default 优先级）、Dockerfile + docker-compose.yml。
 - 多节点增强：注册 token 安全机制、`GET/PUT/DELETE /api/nodes/:id` CRUD 端点、NodesPage + NodeDetailPage 专用节点管理页面、按 node 过滤 agent、node enable/disable/delete、Docker 自动检测（`/.dockerenv`）、Settings 页 token 展示。
+- 安全与权限：JWT 认证（纯 node:crypto，零依赖）、三级 RBAC（admin/operator/viewer）、API 鉴权中间件、LoginPage 登录页、路由守卫、auth store、角色保护端点、secret 脱敏增强（AWS/GCP/Azure/PEM 密钥）、默认 admin 自动创建。
 
 ### 已验证
 
@@ -86,13 +87,24 @@ ProfileDetailPage Env tab            展示 Env key 列表，Set/Edit/Delete
 - NodesPage + NodeDetailPage            节点列表可点击、详情信息面板、enable/disable/delete
 - Agent filter by node                  下拉过滤 agent 列表
 - Docker auto-detection                 /.dockerenv 检测，自动追加 docker tag
+- pnpm run build                        passed（LoginPage in output, 82 modules）
+- POST /api/auth/login                  JWT 登录端点（scrypt 密码哈希 + HMAC-SHA256 JWT）
+- GET /api/auth/status                  会话状态检查
+- 401 on protected endpoints            未登录访问 /api/nodes 返回 401
+- 403 on role-restricted endpoints      viewer 创建 agent → 403; 非 admin 删 node → 403
+- /api/settings/registration-token      仅 admin 可访问
+- LoginPage                             登录表单 + redirect 回跳
+- Router beforeEach guard               未登录重定向到 /login
+- SidebarNav user display               底部面板显示用户名和角色
+- TopBar logout button                  登出按钮清除会话
+- Secret pattern fix + enhancement      6 条脱敏规则覆盖 API key/Bearer/AWS/PEM
 ```
 
 ### 当前边界
 
-- Phase 1-8 已完成，Controller-Agent 架构 + SQLite + Gateway + Logs/Audit + Config/SOUL/Env + 安装部署 + 多节点管理落地。
+- Phase 1-9 已完成，Controller-Agent 架构 + SQLite + Gateway + Logs/Audit + Config/SOUL/Env + 安装部署 + 多节点管理 + 安全权限落地。
 - 所有 Agent 文件操作全部走 command + audit 流程。
-- 暂不做权限、审计增强。
+- 所有管理 API 需要 JWT 鉴权 + 角色控制。
 
 ---
 
@@ -539,7 +551,7 @@ pnpm run build                           passed
 
 ## 11. Phase 9：安全与权限
 
-状态：待开始
+状态：已完成
 
 ### 目标
 
@@ -547,43 +559,64 @@ pnpm run build                           passed
 
 ### 范围
 
-- Web 登录。
-- Token 管理。
-- Role-Based Access Control。
-- 命令白名单强化。
-- Secret 保护。
+- JWT 登录认证（零依赖，纯 node:crypto）。
+- 三级 RBAC（admin / operator / viewer）。
+- API 鉴权中间件。
+- Secret 脱敏增强。
+- 命令白名单已存在（`isCommandType` 校验 17 种命令类型）。
 
 ### 主要任务
 
-- 增加用户模型。
-- 增加角色：
-  - Admin
-  - Operator
-  - Viewer
-- API 鉴权。
-- Hub Agent token 鉴权。
-- Command payload 校验。
-- Env 和日志脱敏规则增强。
-- Web Terminal 默认禁用。
+- 用户模型与数据库：（已完成）
+  - `users` 表（id, username, password_hash, role, created_at）
+  - `createUser`, `getUserByUsername`, `getUserById`, `getAllUsers`, `updateUser`, `deleteUser`
+  - `seedDefaultAdmin` — 首次启动自动创建 admin/admin
+- JWT 认证工具（纯 `node:crypto`）：（已完成）
+  - `signJwt(payload)` — HMAC-SHA256 签名
+  - `verifyJwt(token)` — 验签 + timingSafeEqual
+  - `hashPassword(password)` / `verifyPassword(password, stored)` — scrypt 哈希
+  - JWT secret 从 registration token 派生，无额外配置
+- Auth API 端点：（已完成）
+  - `POST /api/auth/login` — 登录返回 JWT + user
+  - `GET /api/auth/status` — 检查会话状态
+  - `POST /api/auth/change-password` — 修改密码（需鉴权）
+- API 鉴权中间件：（已完成）
+  - `authenticateRequest(req)` — 提取 Bearer token，验签
+  - `/api/auth/*`、`/api/health`、`/api/hub-agents/*` — 公开
+  - 其他所有 `/api/*` — 全部需要有效 JWT
+- 角色保护：（已完成）
+  - 读操作 → viewer+
+  - 写操作（create/rename/delete agent, gateway/setup/doctor, config/SOUL/env）→ operator+
+  - 节点管理（disable/delete）→ admin only
+  - 注册 token 查看 → admin only
+- Web 前端：（已完成）
+  - `auth.ts` Pinia store（localStorage 持久化 token）
+  - `LoginPage.vue` 登录表单（居中卡片，redirect 回跳）
+  - Router `beforeEach` 守卫（未登录重定向 /login）
+  - `App.vue` 条件渲染（登录页不使用 AppShell）
+  - SidebarNav 底部显示用户名和角色
+  - TopBar 登出按钮
+- 命令白名单：（已完成）
+  - `isCommandType` 已校验所有 17 种合法命令类型
+  - 不支持任意 shell command（无 terminal/shell 命令类型）
+- Secret 脱敏增强：（已完成）
+  - 修复 Pattern 1 capture group bug
+  - 新增 AWS access key、cloud credential、PEM 私钥块规则
+  - 共 6 条脱敏规则
 
 ### 交付物
 
-- 登录流程。
-- 权限控制。
-- Token 管理。
-- 安全测试清单。
+- 登录流程。 ✅
+- 权限控制。 ✅
+- JWT Token 管理。 ✅
+- Secret 脱敏增强。 ✅
 
 ### 验收标准
 
-- 未登录不能访问管理 API。
-- Viewer 不能执行变更命令。
-- Hub Agent 无 token 不能注册/心跳。
-- 任意 shell command 不被接受。
-
-### 风险
-
-- 权限体系过早复杂化会拖慢基础功能。
-- 简化权限会带来生产风险，需要明确部署阶段边界。
+- 未登录不能访问管理 API。 ✅
+- Viewer 不能执行变更命令。 ✅
+- Hub Agent 无 token 不能注册/心跳。 ✅（Phase 8）
+- 任意 shell command 不被接受。 ✅（isCommandType 白名单）
 
 ---
 
@@ -609,13 +642,10 @@ Phase 2 和 Phase 3 是后续所有功能的基础，不建议跳过。
 
 ## 13. 下一步建议
 
-Phase 1-8 已完成，下一步进入 Phase 9：安全与权限。
+Phase 1-9 全部完成。Controller-Agent 架构从骨架到安全权限的完整交付。
 
-推荐第一批任务：
-
-- 增加用户模型（Admin / Operator / Viewer）
-- Web 登录流程
-- API 鉴权（未登录不能访问管理 API）
-- Hub Agent token 鉴权强化
-- 命令白名单强化（拒绝任意 shell command）
-- Env 和日志脱敏规则增强
+后续方向建议：
+- Phase 10（可选）：WebSocket 实时推送（替代轮询）/ 高可用 / 集群
+- 生产加固：HTTPS、CORS、CSP headers、rate limiting
+- 审计增强：命令回放、变更对比（diff）
+- 多租户：namespace 隔离、team 协作

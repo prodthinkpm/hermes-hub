@@ -157,3 +157,30 @@ export interface CommandResultRequest {
   started_at?: string
   finished_at?: string
 }
+
+// -- Auth types (Phase 9) --
+
+export type UserRole = 'admin' | 'operator' | 'viewer'
+
+export interface HubUser {
+  id: string
+  username: string
+  role: UserRole
+  createdAt: string
+}
+
+export interface LoginRequest {
+  username: string
+  password: string
+}
+
+export interface LoginResponse {
+  ok: true
+  token: string
+  user: HubUser
+}
+
+export interface AuthStatusResponse {
+  authenticated: boolean
+  user?: HubUser
+}
