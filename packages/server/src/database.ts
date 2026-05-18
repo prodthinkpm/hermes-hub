@@ -1,6 +1,7 @@
 // SQLite persistence layer for Hermes Hub Server.
 // Replaces the in-memory Maps with a SQLite database at ~/.hermes-hub/hub.db.
 
+import { randomBytes, scryptSync } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
@@ -485,7 +486,6 @@ export function deleteUser(db: Database.Database, id: string): void {
 export function seedDefaultAdmin(db: Database.Database): { username: string; password: string } | null {
   const rows = db.prepare('SELECT COUNT(*) AS count FROM users').get() as { count: number }
   if (rows.count > 0) return null
-  const { randomBytes, scryptSync } = require('node:crypto') as typeof import('node:crypto')
   const password = 'admin'
   const salt = randomBytes(16).toString('hex')
   const hash = scryptSync(password, salt, 64).toString('hex')
