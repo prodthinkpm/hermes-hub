@@ -690,7 +690,7 @@ async function handlePublicApi(
       return true
     }
     const token = signJwt({ sub: user.id, username: user.username, role: user.role })
-    jsonReply(res, 200, { ok: true, token, user: { id: user.id, username: user.username, role: user.role, createdAt: user.created_at } })
+    jsonReply(res, 200, { ok: true, data: { token, user: { id: user.id, username: user.username, role: user.role, createdAt: user.created_at } } })
     return true
   }
 
