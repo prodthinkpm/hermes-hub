@@ -11,17 +11,30 @@ import type {
   HubNode,
   ManagedAgent,
 } from '@hermes-hub/protocol'
+import type Database from 'better-sqlite3'
+import {
+  initDatabase,
+  getNode,
+  getAllNodes,
+  upsertNode as dbUpsertNode,
+  getAgent,
+  getAllAgents,
+  upsertAgent,
+  deleteAgentsForNode,
+  getCommand,
+  getAllCommands,
+  upsertCommand,
+  getNextCommandNumber,
+  getRunningCommandsForNode,
+  getBusyAgentIds,
+  pollNextPendingCommand,
+} from './database.js'
 
 export interface ServerOptions {
   port: number
   apiUrl?: string
   staticDir?: string
-}
-
-interface HubState {
-  nodes: Map<string, HubNode>
-  agents: Map<string, ManagedAgent>
-  commands: Map<string, HubCommand>
+  dbPath?: string  // SQLite 数据库路径，默认 ~/.hermes-hub/hub.db
 }
 
 const MIME: Record<string, string> = {
@@ -41,14 +54,6 @@ const MIME: Record<string, string> = {
   '.yaml': 'text/yaml; charset=utf-8',
   '.yml': 'text/yaml; charset=utf-8',
 }
-
-const state: HubState = {
-  nodes: new Map(),
-  agents: new Map(),
-  commands: new Map(),
-}
-
-let nextCommandNumber = 1
 
 function nowIso(): string {
   return new Date().toISOString()
@@ -128,16 +133,22 @@ function validateCommandResultBody(body: unknown): CommandResultRequest | null {
   return body as unknown as CommandResultRequest
 }
 
-function chooseDefaultNodeId(): string | null {
-  const onlineNode = [...state.nodes.values()].find((node) => node.status === 'online')
-  return onlineNode?.id ?? state.nodes.values().next().value?.id ?? null
+// 从数据库查找第一个 online node，用于没有明确 target node 的命令
+function chooseDefaultNodeId(db: Database.Database): string | null {
+  const allNodes = getAllNodes(db)
+  const onlineNode = allNodes.find((node) => node.status === 'online')
+  return onlineNode?.id ?? allNodes[0]?.id ?? null
 }
 
-function createCommand(body: CreateCommandRequest): { ok: true; command: HubCommand } | { ok: false; error: string } {
-  const agent = body.agentId ? state.agents.get(body.agentId) : undefined
-  const nodeId = body.nodeId ?? agent?.nodeId ?? chooseDefaultNodeId()
+// 创建命令并写入数据库
+function createCommand(
+  db: Database.Database,
+  body: CreateCommandRequest
+): { ok: true; command: HubCommand } | { ok: false; error: string } {
+  const agent = body.agentId ? getAgent(db, body.agentId) : undefined
+  const nodeId = body.nodeId ?? agent?.nodeId ?? chooseDefaultNodeId(db)
   if (!nodeId) return { ok: false, error: 'No registered node is available' }
-  if (!state.nodes.has(nodeId)) return { ok: false, error: `Node '${nodeId}' not found` }
+  if (!getNode(db, nodeId)) return { ok: false, error: `Node '${nodeId}' not found` }
 
   if ((body.type === 'profile.rename' || body.type === 'profile.delete') && !agent) {
     return { ok: false, error: `${body.type} requires a valid agentId` }
@@ -160,8 +171,10 @@ function createCommand(body: CreateCommandRequest): { ok: true; command: HubComm
     typeof body.payload?.timeoutSeconds === 'number'
       ? (body.payload as Record<string, number>).timeoutSeconds
       : 300
+  // 使用数据库原子计数器生成命令 ID
+  const commandNum = getNextCommandNumber(db)
   const command: HubCommand = {
-    id: `cmd_${String(nextCommandNumber++).padStart(6, '0')}`,
+    id: `cmd_${String(commandNum).padStart(6, '0')}`,
     nodeId,
     agentId: body.agentId,
     type: body.type,
@@ -175,12 +188,16 @@ function createCommand(body: CreateCommandRequest): { ok: true; command: HubComm
     createdAt: timestamp,
     updatedAt: timestamp,
   }
-  state.commands.set(command.id, command)
+  upsertCommand(db, command)
   return { ok: true, command }
 }
 
-function upsertNode(body: HubAgentRegisterRequest): HubNode {
-  const existing = state.nodes.get(body.node_id)
+// 根据注册请求构造 node 对象并写入数据库，保留已有节点的历史数据
+function upsertNode(
+  db: Database.Database,
+  body: HubAgentRegisterRequest
+): HubNode {
+  const existing = getNode(db, body.node_id)
   const timestamp = nowIso()
   const node: HubNode = {
     id: body.node_id,
@@ -200,15 +217,15 @@ function upsertNode(body: HubAgentRegisterRequest): HubNode {
     createdAt: existing?.createdAt ?? timestamp,
     updatedAt: timestamp,
   }
-  state.nodes.set(node.id, node)
+  dbUpsertNode(db, node)
   return node
 }
 
 // 检查 node 上所有 running 命令是否超过 timeoutSeconds，超时则标记为 timeout
-function checkTimeouts(nodeId: string, timestamp: string): void {
+function checkTimeouts(db: Database.Database, nodeId: string, timestamp: string): void {
   const now = new Date(timestamp).getTime()
-  for (const command of state.commands.values()) {
-    if (command.nodeId !== nodeId || command.status !== 'running') continue
+  const runningCommands = getRunningCommandsForNode(db, nodeId)
+  for (const command of runningCommands) {
     if (!command.startedAt) continue
     const startedMs = new Date(command.startedAt).getTime()
     const elapsedSeconds = (now - startedMs) / 1000
@@ -217,12 +234,17 @@ function checkTimeouts(nodeId: string, timestamp: string): void {
       command.error = `Command timed out after ${elapsedSeconds.toFixed(0)}s (limit: ${command.timeoutSeconds}s)`
       command.finishedAt = timestamp
       command.updatedAt = timestamp
-      state.commands.set(command.id, command)
+      upsertCommand(db, command)
     }
   }
 }
 
-function upsertAgentsFromHeartbeat(nodeId: string, body: HubAgentHeartbeatRequest): void {
+// 心跳处理：更新 agents 表，清理已从磁盘消失的 profile
+function upsertAgentsFromHeartbeat(
+  db: Database.Database,
+  nodeId: string,
+  body: HubAgentHeartbeatRequest
+): void {
   const timestamp = nowIso()
   const seen = new Set<string>()
 
@@ -230,7 +252,7 @@ function upsertAgentsFromHeartbeat(nodeId: string, body: HubAgentHeartbeatReques
     if (!profile.profile_name || !profile.profile_home) continue
     const id = `${nodeId}:${profile.profile_name}`
     seen.add(id)
-    const existing = state.agents.get(id)
+    const existing = getAgent(db, id)
     const agent: ManagedAgent = {
       id,
       nodeId,
@@ -254,14 +276,11 @@ function upsertAgentsFromHeartbeat(nodeId: string, body: HubAgentHeartbeatReques
       createdAt: existing?.createdAt ?? timestamp,
       updatedAt: timestamp,
     }
-    state.agents.set(id, agent)
+    upsertAgent(db, agent)
   }
 
-  for (const [agentId, agent] of state.agents.entries()) {
-    if (agent.nodeId === nodeId && !seen.has(agentId)) {
-      state.agents.delete(agentId)
-    }
-  }
+  // 删除该 node 上在本次心跳中未出现（已从磁盘删除）的 agent
+  deleteAgentsForNode(db, nodeId, seen)
 }
 
 function mapAgentStatusToTone(status: string): 'running' | 'stopped' | 'warn' | 'bad' | 'info' | 'purple' {
@@ -298,7 +317,13 @@ function profileCompat(agent: ManagedAgent) {
   }
 }
 
-async function handleHubAgentApi(path: string, method: string, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+async function handleHubAgentApi(
+  path: string,
+  method: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+  db: Database.Database
+): Promise<boolean> {
   if (path === '/api/hub-agents/register') {
     if (method !== 'POST') {
       jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
@@ -316,7 +341,7 @@ async function handleHubAgentApi(path: string, method: string, req: IncomingMess
       jsonReply(res, 400, { ok: false, error: 'Invalid register payload' })
       return true
     }
-    const node = upsertNode(registerBody)
+    const node = upsertNode(db, registerBody)
     jsonReply(res, 200, {
       ok: true,
       node_id: node.id,
@@ -334,35 +359,22 @@ async function handleHubAgentApi(path: string, method: string, req: IncomingMess
       return true
     }
     const nodeId = decodeURIComponent(pollMatch[1])
-    if (!state.nodes.has(nodeId)) {
+    if (!getNode(db, nodeId)) {
       jsonReply(res, 404, { ok: false, error: `Node '${nodeId}' is not registered` })
       return true
     }
     const timestamp = nowIso()
-    // 写操作白名单：同一 agent 同时只允许一个写操作
-    const WRITE_TYPES = new Set(['profile.create', 'profile.rename', 'profile.delete'])
-    // 收集当前 node 上所有正在运行的写命令对应的 agentId
-    const busyAgentIds = new Set(
-      [...state.commands.values()]
-        .filter((c) => c.nodeId === nodeId && c.status === 'running' && c.agentId && WRITE_TYPES.has(c.type))
-        .map((c) => c.agentId)
-    )
-    const commands = [...state.commands.values()]
-      .filter((command) => {
-        if (command.nodeId !== nodeId || command.status !== 'pending') return false
-        // 跳过目标 agent 正忙于其他写操作的命令
-        if (command.agentId && WRITE_TYPES.has(command.type) && busyAgentIds.has(command.agentId)) return false
-        return true
-      })
-      .slice(0, 1)
-      .map((command) => {
-        command.status = 'dispatched'
-        command.dispatchedAt = timestamp
-        command.updatedAt = timestamp
-        state.commands.set(command.id, command)
-        return command
-      })
-    jsonReply(res, 200, { ok: true, commands })
+    // 写操作串行化：收集当前 node 上正在运行的写命令对应的 agentId
+    const busyAgentIds = getBusyAgentIds(db, nodeId)
+    // 从数据库查询下一条待分发命令（自动跳过 busy agent）
+    const nextCommand = pollNextPendingCommand(db, nodeId, busyAgentIds)
+    if (nextCommand) {
+      nextCommand.status = 'dispatched'
+      nextCommand.dispatchedAt = timestamp
+      nextCommand.updatedAt = timestamp
+      upsertCommand(db, nextCommand)
+    }
+    jsonReply(res, 200, { ok: true, commands: nextCommand ? [nextCommand] : [] })
     return true
   }
 
@@ -374,7 +386,7 @@ async function handleHubAgentApi(path: string, method: string, req: IncomingMess
     }
     const nodeId = decodeURIComponent(commandStartedMatch[1])
     const commandId = decodeURIComponent(commandStartedMatch[2])
-    const command = state.commands.get(commandId)
+    const command = getCommand(db, commandId)
     if (!command || command.nodeId !== nodeId) {
       jsonReply(res, 404, { ok: false, error: `Command '${commandId}' not found` })
       return true
@@ -383,7 +395,7 @@ async function handleHubAgentApi(path: string, method: string, req: IncomingMess
     command.status = 'running'
     command.startedAt = timestamp
     command.updatedAt = timestamp
-    state.commands.set(command.id, command)
+    upsertCommand(db, command)
     jsonReply(res, 200, { ok: true, data: command })
     return true
   }
@@ -396,7 +408,7 @@ async function handleHubAgentApi(path: string, method: string, req: IncomingMess
     }
     const nodeId = decodeURIComponent(commandResultMatch[1])
     const commandId = decodeURIComponent(commandResultMatch[2])
-    const command = state.commands.get(commandId)
+    const command = getCommand(db, commandId)
     if (!command || command.nodeId !== nodeId) {
       jsonReply(res, 404, { ok: false, error: `Command '${commandId}' not found` })
       return true
@@ -423,7 +435,7 @@ async function handleHubAgentApi(path: string, method: string, req: IncomingMess
     command.startedAt = command.startedAt ?? resultBody.started_at
     command.finishedAt = resultBody.finished_at ?? timestamp
     command.updatedAt = timestamp
-    state.commands.set(command.id, command)
+    upsertCommand(db, command)
     jsonReply(res, 200, { ok: true, data: command })
     return true
   }
@@ -436,7 +448,7 @@ async function handleHubAgentApi(path: string, method: string, req: IncomingMess
   }
 
   const nodeId = decodeURIComponent(heartbeatMatch[1])
-  const node = state.nodes.get(nodeId)
+  const node = getNode(db, nodeId)
   if (!node) {
     jsonReply(res, 404, { ok: false, error: `Node '${nodeId}' is not registered` })
     return true
@@ -462,16 +474,22 @@ async function handleHubAgentApi(path: string, method: string, req: IncomingMess
   node.profilesTotal = heartbeatBody.summary?.profiles_total ?? heartbeatBody.profiles.length
   node.gatewayRunning = heartbeatBody.summary?.gateway_running ?? heartbeatBody.profiles.filter((p) => p.gateway_status === 'running').length
   node.updatedAt = timestamp
-  state.nodes.set(node.id, node)
-  upsertAgentsFromHeartbeat(nodeId, heartbeatBody)
+  dbUpsertNode(db, node)
+  upsertAgentsFromHeartbeat(db, nodeId, heartbeatBody)
   // 检查该 node 上所有 running 命令是否超时
-  checkTimeouts(nodeId, timestamp)
+  checkTimeouts(db, nodeId, timestamp)
 
   jsonReply(res, 200, { ok: true, data: null })
   return true
 }
 
-async function handlePublicApi(path: string, method: string, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+async function handlePublicApi(
+  path: string,
+  method: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+  db: Database.Database
+): Promise<boolean> {
   if (path === '/api/health') {
     if (method !== 'GET') {
       jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
@@ -483,7 +501,7 @@ async function handlePublicApi(path: string, method: string, req: IncomingMessag
 
   if (path === '/api/commands' || path === '/api/commands/') {
     if (method === 'GET') {
-      jsonReply(res, 200, { ok: true, data: [...state.commands.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) })
+      jsonReply(res, 200, { ok: true, data: getAllCommands(db) })
       return true
     }
     if (method === 'POST') {
@@ -499,7 +517,7 @@ async function handlePublicApi(path: string, method: string, req: IncomingMessag
         jsonReply(res, 400, { ok: false, error: 'Invalid command payload' })
         return true
       }
-      const result = createCommand(createBody)
+      const result = createCommand(db, createBody)
       if (!result.ok) {
         jsonReply(res, 400, { ok: false, error: result.error })
         return true
@@ -517,7 +535,7 @@ async function handlePublicApi(path: string, method: string, req: IncomingMessag
       jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
       return true
     }
-    const command = state.commands.get(decodeURIComponent(commandMatch[1]))
+    const command = getCommand(db, decodeURIComponent(commandMatch[1]))
     if (!command) {
       jsonReply(res, 404, { ok: false, error: `Command '${decodeURIComponent(commandMatch[1])}' not found` })
       return true
@@ -531,7 +549,7 @@ async function handlePublicApi(path: string, method: string, req: IncomingMessag
       jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
       return true
     }
-    jsonReply(res, 200, { ok: true, data: [...state.nodes.values()] })
+    jsonReply(res, 200, { ok: true, data: getAllNodes(db) })
     return true
   }
 
@@ -540,7 +558,7 @@ async function handlePublicApi(path: string, method: string, req: IncomingMessag
       jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
       return true
     }
-    jsonReply(res, 200, { ok: true, data: [...state.agents.values()] })
+    jsonReply(res, 200, { ok: true, data: getAllAgents(db) })
     return true
   }
 
@@ -551,7 +569,7 @@ async function handlePublicApi(path: string, method: string, req: IncomingMessag
       return true
     }
     const id = decodeURIComponent(agentMatch[1])
-    const agent = state.agents.get(id)
+    const agent = getAgent(db, id)
     if (!agent) {
       jsonReply(res, 404, { ok: false, error: `Agent '${id}' not found` })
       return true
@@ -578,7 +596,7 @@ async function handlePublicApi(path: string, method: string, req: IncomingMessag
         jsonReply(res, 400, { ok: false, error: 'name is required' })
         return true
       }
-      const result = createCommand({
+      const result = createCommand(db, {
         nodeId: typeof body.nodeId === 'string' ? body.nodeId : undefined,
         type: 'profile.create',
         payload: {
@@ -599,7 +617,7 @@ async function handlePublicApi(path: string, method: string, req: IncomingMessag
       jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
       return true
     }
-    jsonReply(res, 200, { ok: true, data: [...state.agents.values()].map(profileCompat) })
+    jsonReply(res, 200, { ok: true, data: getAllAgents(db).map(profileCompat) })
     return true
   }
 
@@ -618,7 +636,7 @@ async function handlePublicApi(path: string, method: string, req: IncomingMessag
     }
     const agentId = decodeURIComponent(profileRenameMatch[1])
     const nextName = isObject(body) && typeof body.name === 'string' ? body.name.trim() : ''
-    const result = createCommand({
+    const result = createCommand(db, {
       agentId,
       type: 'profile.rename',
       payload: { new_name: nextName },
@@ -635,7 +653,7 @@ async function handlePublicApi(path: string, method: string, req: IncomingMessag
   if (profileMatch) {
     const id = decodeURIComponent(profileMatch[1])
     if (method === 'DELETE') {
-      const result = createCommand({
+      const result = createCommand(db, {
         agentId: id,
         type: 'profile.delete',
         payload: {},
@@ -651,7 +669,7 @@ async function handlePublicApi(path: string, method: string, req: IncomingMessag
       jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
       return true
     }
-    const agent = state.agents.get(id)
+    const agent = getAgent(db, id)
     if (!agent) {
       jsonReply(res, 404, { ok: false, error: `Agent '${id}' not found` })
       return true
@@ -691,17 +709,22 @@ function serveStatic(res: ServerResponse, staticDir: string | undefined, path: s
   return true
 }
 
-async function handleRequest(req: IncomingMessage, res: ServerResponse, opts: ServerOptions): Promise<void> {
+async function handleRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts: ServerOptions,
+  db: Database.Database
+): Promise<void> {
   const rawUrl = req.url ?? '/'
   const path = rawUrl.split('?')[0]
   const method = req.method ?? 'GET'
 
   if (path.startsWith('/api/hub-agents')) {
-    if (await handleHubAgentApi(path, method, req, res)) return
+    if (await handleHubAgentApi(path, method, req, res, db)) return
   }
 
   if (path.startsWith('/api/')) {
-    if (await handlePublicApi(path, method, req, res)) return
+    if (await handlePublicApi(path, method, req, res, db)) return
     jsonReply(res, 404, { ok: false, error: `Unknown API route: ${path}` })
     return
   }
@@ -719,8 +742,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, opts: Se
 }
 
 export function startServer(opts: ServerOptions): ReturnType<typeof createServer> {
+  // 初始化 SQLite 数据库，持久化 path 默认为 ~/.hermes-hub/hub.db
+  const db = initDatabase(opts.dbPath)
+
   const server = createServer((req, res) => {
-    void handleRequest(req, res, opts)
+    void handleRequest(req, res, opts, db)
   })
 
   server.on('error', (error) => {

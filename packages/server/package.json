@@ -12,9 +12,11 @@
     "dev": "tsc --watch"
   },
   "dependencies": {
-    "@hermes-hub/protocol": "workspace:*"
+    "@hermes-hub/protocol": "workspace:*",
+    "better-sqlite3": "^11.0.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^25.8.0",
     "typescript": "^6.0.3"
   }
