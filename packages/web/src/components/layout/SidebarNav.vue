@@ -9,6 +9,7 @@ const hubStore = useHubStore()
 
 function isActive(key: RouteKey): boolean {
   if (key === 'profiles') return ['profiles', 'profile', 'profileLogs', 'create'].includes(String(route.name))
+  if (key === 'nodes') return ['nodes', 'nodeDetail'].includes(String(route.name))
   return route.name === key
 }
 </script>

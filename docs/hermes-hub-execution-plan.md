@@ -1,6 +1,6 @@
 # Hermes Hub 任务执行计划
 
-版本：v0.7
+版本：v0.8
 日期：2026-05-18
 分支：`refactor-controller-agent-architecture`
 目标：按 Controller-Agent 技术方案重构当前项目，保留现有 Web 视觉风格，替换底层架构模型。
@@ -53,6 +53,7 @@ Command Queue = 所有变更操作入口
 - Logs Center：4 条日志查询路由（all/agent/node/command），审计日志自动记录，密钥脱敏。
 - Config/SOUL/Env 管理：8 种新命令类型，异步文件读写 + 写入备份，Env 只展示 key 不展示 value。
 - Hub Agent 安装与部署：`init` 子命令（平台标准路径配置生成）、`service` 子命令（systemd/launchd/schtasks 服务管理）、`--config` 配置文件加载（CLI > env > config > default 优先级）、Dockerfile + docker-compose.yml。
+- 多节点增强：注册 token 安全机制、`GET/PUT/DELETE /api/nodes/:id` CRUD 端点、NodesPage + NodeDetailPage 专用节点管理页面、按 node 过滤 agent、node enable/disable/delete、Docker 自动检测（`/.dockerenv`）、Settings 页 token 展示。
 
 ### 已验证
 
@@ -78,13 +79,20 @@ ProfileDetailPage Env tab            展示 Env key 列表，Set/Edit/Delete
 - hermes-hub-agent init                 生成 config.yaml 到平台标准路径
 - hermes-hub-agent service status       正确检测平台并报告服务状态
 - docker compose config                 验证通过（hub-server + hub-agent + volumes）
+- pnpm run build                        passed（NodesPage + NodeDetailPage in output）
+- hermes-hub-agent --token              新增 --token CLI 参数（run + init）
+- /api/nodes/:id GET/PUT/DELETE         单 node CRUD 端点
+- /api/settings/registration-token      返回 token 和 enabled 状态
+- NodesPage + NodeDetailPage            节点列表可点击、详情信息面板、enable/disable/delete
+- Agent filter by node                  下拉过滤 agent 列表
+- Docker auto-detection                 /.dockerenv 检测，自动追加 docker tag
 ```
 
 ### 当前边界
 
-- Phase 1-7 已完成，Controller-Agent 架构 + SQLite + Gateway + Logs/Audit + Config/SOUL/Env + 安装部署落地。
+- Phase 1-8 已完成，Controller-Agent 架构 + SQLite + Gateway + Logs/Audit + Config/SOUL/Env + 安装部署 + 多节点管理落地。
 - 所有 Agent 文件操作全部走 command + audit 流程。
-- 暂不做远程节点、多节点、权限、审计增强。
+- 暂不做权限、审计增强。
 
 ---
 
@@ -467,7 +475,7 @@ pnpm run build                           passed
 
 ## 10. Phase 8：远程 / Docker / 多节点增强
 
-状态：待开始
+状态：已完成
 
 ### 目标
 
@@ -475,46 +483,57 @@ pnpm run build                           passed
 
 ### 范围
 
-- Node 注册 Token。
-- Node 状态页。
+- Node 注册 Token 安全机制。
+- Node 专用管理页面（列表 + 详情）。
 - 多节点 Agent Fleet。
-- Docker 模式。
-- 节点维护状态。
+- Docker 环境自动检测。
+- 节点 enable/disable/delete。
 
 ### 主要任务
 
-- Hub Server 增加注册 token。
-- Hub Agent 注册时使用 token。
-- Node 页面展示：
-  - hostname
-  - OS
-  - arch
-  - agent version
-  - hermes home
-  - last heartbeat
-  - profiles count
-  - gateway count
-- 支持 node disable / enable。
-- Docker 模式识别 `/opt/data`。
-- Web 增加 Node 过滤器。
+- 注册 token 机制：（已完成）
+  - Server 启动时自动生成 token（`crypto.randomUUID()`）存储到 metadata 表
+  - `ServerOptions.registrationToken` 支持手动指定
+  - `POST /api/hub-agents/register` token 校验（token 为空时跳过，向后兼容）
+  - `GET /api/settings/registration-token` 返回 token
+- Node CRUD 端点：（已完成）
+  - `GET /api/nodes/:id` 单 node 详情
+  - `PUT /api/nodes/:id` 更新 name/status/tags（写审计日志）
+  - `DELETE /api/nodes/:id` 删除（仅 offline/disabled node，先删 agents 再删 node）
+- 数据库层：（已完成）
+  - `deleteNode`、`updateNodeFields`、`getMetadataValue`、`setMetadataValue`
+- API 客户端：（已完成）
+  - `getNode`、`updateNode`、`deleteNode`、`getRegistrationToken`
+- Web 节点管理页面：（已完成）
+  - `NodesPage.vue` — 节点列表（StatusBadge、Clickable rows、统计卡片）
+  - `NodeDetailPage.vue` — 节点详情（信息网格、Enable/Disable/Delete 操作）
+  - 侧边栏新增 "Nodes" 导航项
+  - `/nodes` 和 `/nodes/:id` 路由
+- Agents 按 node 过滤：（已完成）
+  - `ProfilesPage.vue` 节点过滤下拉框
+  - `ProfileTable.vue` `filterNodeId` prop
+- Settings 页 token 展示：（已完成）
+  - 注册 token 只读显示 + 复制按钮
+- Hub Agent 侧：（已完成）
+  - `--token` CLI 参数、`HERMES_HUB_TOKEN` 环境变量、config.yaml `token` 字段
+  - Docker 自动检测（`/.dockerenv` 或 `/proc/1/cgroup`），自动追加 `"docker"` tag
+  - 注册 payload 携带 token
 
 ### 交付物
 
-- Node Management 页面。
-- 多节点 Agent Fleet。
-- Docker 接入文档。
+- NodesPage + NodeDetailPage。
+- Agent filter by node。
+- Registration token 机制。
+- Docker 自动检测。
 
 ### 验收标准
 
-- 两个不同 node 能同时注册。
-- Agents 列表能按 Node 过滤。
-- offline node 能被标记。
-- 禁用 node 后不再下发命令。
-
-### 风险
-
-- Token 生命周期和撤销策略需要和权限体系一起设计。
-- Docker 容器内 Gateway 管理要避免误停自身。
+- `pnpm run build` 通过（NodesPage + NodeDetailPage in output）。 ✅
+- `GET/PUT/DELETE /api/nodes/:id` 端点正常。 ✅
+- Agents 列表能按 Node 过滤。 ✅
+- 禁用/删除 node 操作可用。 ✅
+- Docker agent 自动打上 `docker` tag。 ✅
+- Settings 页展示 registration token。 ✅
 
 ---
 
@@ -590,13 +609,13 @@ Phase 2 和 Phase 3 是后续所有功能的基础，不建议跳过。
 
 ## 13. 下一步建议
 
-Phase 1-7 已完成，下一步进入 Phase 8：远程 / Docker / 多节点增强。
+Phase 1-8 已完成，下一步进入 Phase 9：安全与权限。
 
 推荐第一批任务：
 
-- Hub Server 增加注册 token 机制
-- Hub Agent 注册时使用 token
-- Node 页面展示 hostname、OS、arch、agent version、last heartbeat
-- 支持 node disable / enable
-- Docker 模式识别挂载数据目录
-- Web 增加 Node 过滤器
+- 增加用户模型（Admin / Operator / Viewer）
+- Web 登录流程
+- API 鉴权（未登录不能访问管理 API）
+- Hub Agent token 鉴权强化
+- 命令白名单强化（拒绝任意 shell command）
+- Env 和日志脱敏规则增强

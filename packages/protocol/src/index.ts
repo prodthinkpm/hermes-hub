@@ -69,6 +69,13 @@ export interface HubAgentRegisterRequest {
   }
   capabilities?: Record<string, boolean>
   tags?: string[]
+  token?: string
+}
+
+export interface HubNodeUpdateRequest {
+  name?: string
+  status?: NodeStatus
+  tags?: string[]
 }
 
 export interface HubAgentRegisterResponse {

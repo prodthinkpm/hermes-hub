@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useHubStore } from '@/stores/hub'
 import ProfileTable from '@/components/fleet/ProfileTable.vue'
@@ -7,8 +8,10 @@ import StatCard from '@/components/ui/StatCard.vue'
 import SectionTitle from '@/components/ui/SectionTitle.vue'
 import type { StatItem } from '@/types/hub'
 
+const router = useRouter()
 const hubStore = useHubStore()
 const { profiles, nodes } = storeToRefs(hubStore)
+const selectedNodeId = ref('')
 
 const fleetStats = computed<StatItem[]>(() => {
   const total = profiles.value.length
@@ -59,7 +62,12 @@ onMounted(() => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="node in nodes" :key="node.id" class="text-[13px] text-parchment">
+            <tr
+              v-for="node in nodes"
+              :key="node.id"
+              class="cursor-pointer text-[13px] text-parchment transition hover:bg-snow/[.04]"
+              @click="router.push('/nodes/' + node.id)"
+            >
               <td class="border-b border-snow/10 px-[18px] py-[15px] font-black text-snow">{{ node.name }}</td>
               <td class="border-b border-snow/10 px-[18px] py-[15px]">{{ node.status }}</td>
               <td class="border-b border-snow/10 px-[18px] py-[15px]">{{ node.hostname }} / {{ node.os }}</td>
@@ -72,6 +80,18 @@ onMounted(() => {
       </div>
     </section>
 
-    <ProfileTable />
+    <!-- Node filter -->
+    <div v-if="nodes.length > 0" class="mb-4 flex items-center gap-2">
+      <label class="text-[13px] font-bold text-slate">Filter by Node:</label>
+      <select
+        v-model="selectedNodeId"
+        class="rounded-md border border-snow/10 bg-carbon px-3 py-1.5 text-[13px] text-parchment outline-none focus:border-signal/50"
+      >
+        <option value="">All Nodes</option>
+        <option v-for="node in nodes" :key="node.id" :value="node.id">{{ node.name }} ({{ node.id }})</option>
+      </select>
+    </div>
+
+    <ProfileTable :filter-node-id="selectedNodeId" />
   </div>
 </template>

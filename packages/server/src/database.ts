@@ -394,6 +394,42 @@ export function deleteAgentsForNode(db: Database.Database, nodeId: string, keepI
   ).run(nodeId, ...keepIds)
 }
 
+// -- Node management (Phase 8) --
+
+export function deleteNode(db: Database.Database, id: string): void {
+  deleteAgentsForNode(db, id, new Set())
+  db.prepare('DELETE FROM nodes WHERE id = ?').run(id)
+}
+
+export function updateNodeFields(
+  db: Database.Database,
+  id: string,
+  fields: Partial<Pick<HubNode, 'name' | 'status' | 'tags'>>
+): HubNode | undefined {
+  const existing = getNode(db, id)
+  if (!existing) return undefined
+  const merged: HubNode = {
+    ...existing,
+    name: fields.name ?? existing.name,
+    status: fields.status ?? existing.status,
+    tags: fields.tags ?? existing.tags,
+    updatedAt: new Date().toISOString(),
+  }
+  upsertNode(db, merged)
+  return merged
+}
+
+// -- Metadata helpers (Phase 8) --
+
+export function getMetadataValue(db: Database.Database, key: string): string | undefined {
+  const row = db.prepare('SELECT value FROM metadata WHERE key = ?').get(key) as { value: string } | undefined
+  return row?.value
+}
+
+export function setMetadataValue(db: Database.Database, key: string, value: string): void {
+  db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').run(key, value)
+}
+
 // -- Commands --
 
 export function getCommand(db: Database.Database, id: string): HubCommand | undefined {

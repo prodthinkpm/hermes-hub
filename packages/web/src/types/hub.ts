@@ -9,7 +9,7 @@ export {
   type ManagedAgent,
 } from '@hermes-hub/core'
 
-export type RouteKey = 'dashboard' | 'profiles' | 'create' | 'profile' | 'profileLogs' | 'services' | 'logs' | 'settings'
+export type RouteKey = 'dashboard' | 'profiles' | 'create' | 'profile' | 'profileLogs' | 'services' | 'logs' | 'settings' | 'nodes' | 'nodeDetail'
 
 export interface NavItem {
   key: RouteKey

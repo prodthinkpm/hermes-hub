@@ -236,8 +236,20 @@ def scan_profiles(hermes_home: Path) -> list[dict[str, Any]]:
     return profiles
 
 
-def register(base_url: str, node_id: str, node_name: str, hermes_home: Path) -> None:
-    payload = {
+def register(base_url: str, node_id: str, node_name: str, hermes_home: Path, token: str = "") -> None:
+    # Docker auto-detection
+    tags = ["local"]
+    if os.path.exists("/.dockerenv"):
+        tags.append("docker")
+    else:
+        try:
+            with open("/proc/1/cgroup", "r") as f:
+                if "docker" in f.read():
+                    tags.append("docker")
+        except OSError:
+            pass
+
+    payload: dict[str, Any] = {
         "node_id": node_id,
         "name": node_name,
         "hostname": socket.gethostname(),
@@ -253,8 +265,10 @@ def register(base_url: str, node_id: str, node_name: str, hermes_home: Path) -> 
             "logs": False,
             "commands": True,
         },
-        "tags": ["local"],
+        "tags": tags,
     }
+    if token:
+        payload["token"] = token
     post_json(base_url, "/api/hub-agents/register", payload)
 
 
@@ -561,6 +575,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         DEFAULT_HUB_URL,
         DEFAULT_NODE_ID,
         DEFAULT_NODE_NAME,
+        DEFAULT_TOKEN,
         config_path,
         write_config,
     )
@@ -570,6 +585,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     node_name = args.node_name or DEFAULT_NODE_NAME
     hermes_home = args.hermes_home or DEFAULT_HERMES_HOME
     heartbeat_interval = args.interval or DEFAULT_HEARTBEAT_INTERVAL
+    token = args.token or DEFAULT_TOKEN
 
     cpath = write_config(
         hub_url=hub_url,
@@ -577,6 +593,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         node_name=node_name,
         hermes_home=hermes_home,
         heartbeat_interval=heartbeat_interval,
+        token=token,
     )
     print(f"Configuration written to {cpath}")
     print(f"  hub_url: {hub_url}")
@@ -584,6 +601,8 @@ def cmd_init(args: argparse.Namespace) -> None:
     print(f"  node_name: {node_name}")
     print(f"  hermes_home: {hermes_home}")
     print(f"  heartbeat_interval: {heartbeat_interval}")
+    if token:
+        print(f"  token: {token}")
 
 
 # ---------------------------------------------------------------------------
@@ -646,10 +665,11 @@ def cmd_run(args: argparse.Namespace) -> None:
     node_name = _resolve(args.node_name, "HERMES_NODE_NAME", "node_name", "local")
     hermes_home_str = _resolve(args.hermes_home, "HERMES_HOME", "hermes_home", str(default_hermes_home()))
     interval = int(_resolve(args.interval, "HERMES_HUB_HEARTBEAT_INTERVAL", "heartbeat_interval", 10))
+    token = _resolve(args.token, "HERMES_HUB_TOKEN", "token", "")
     once = args.once
 
     hermes_home = Path(hermes_home_str).expanduser()
-    register(hub_url, node_id, node_name, hermes_home)
+    register(hub_url, node_id, node_name, hermes_home, token=token)
     heartbeat(hub_url, node_id, hermes_home)
     print(f"registered node '{node_id}' and scanned {hermes_home}")
 
@@ -684,6 +704,7 @@ def main() -> None:
     run_parser.add_argument("--interval", type=int, default=None, help="Heartbeat interval in seconds")
     run_parser.add_argument("--once", action="store_true", help="Register and send one heartbeat, then exit")
     run_parser.add_argument("--config", default=None, help="Path to config file")
+    run_parser.add_argument("--token", default=None, help="Registration token for the hub server")
 
     # ---- init ----
     init_parser = subparsers.add_parser("init", help="Generate a configuration file")
@@ -695,6 +716,7 @@ def main() -> None:
         "--interval", type=int, default=None,
         help="Heartbeat interval in seconds for config",
     )
+    init_parser.add_argument("--token", default=None, help="Registration token for the hub server")
 
     # ---- service ----
     service_parser = subparsers.add_parser("service", help="Manage the agent system service")

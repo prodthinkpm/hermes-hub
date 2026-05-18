@@ -19,6 +19,7 @@ export const useHubStore = defineStore('hub', () => {
   const logsError = ref<string | null>(null)
   const hubStatus = ref('running')
   const hubVersion = ref('--')
+  const registrationToken = ref('')
 
   let toastTimer: number | undefined
 
@@ -211,6 +212,34 @@ export const useHubStore = defineStore('hub', () => {
     return result.data
   }
 
+  // Node management (Phase 8)
+  async function fetchNode(id: string): Promise<HubNode | null> {
+    const result = await api.getNode(id)
+    if (!result.ok || !result.data) return null
+    return result.data
+  }
+
+  async function updateNode(id: string, fields: Partial<Pick<HubNode, 'name' | 'status' | 'tags'>>): Promise<{ ok: boolean; error?: string }> {
+    const result = await api.updateNode(id, fields)
+    if (!result.ok) return { ok: false, error: result.error ?? 'Failed to update node' }
+    await fetchProfiles()
+    return { ok: true }
+  }
+
+  async function deleteNode(id: string): Promise<{ ok: boolean; error?: string }> {
+    const result = await api.deleteNode(id)
+    if (!result.ok) return { ok: false, error: result.error ?? 'Failed to delete node' }
+    await fetchProfiles()
+    return { ok: true }
+  }
+
+  async function fetchRegistrationToken(): Promise<void> {
+    const result = await api.getRegistrationToken()
+    if (result.ok && result.data) {
+      registrationToken.value = result.data.token
+    }
+  }
+
   // 单 agent gateway 操作
   async function startGateway(id: string): Promise<{ ok: boolean; error?: string }> {
     const result = await api.startGateway(id)
@@ -339,6 +368,12 @@ export const useHubStore = defineStore('hub', () => {
     fetchProfileSkills,
     fetchLogs,
     fetchProfileLogs,
+    // Node management
+    registrationToken,
+    fetchNode,
+    updateNode,
+    deleteNode,
+    fetchRegistrationToken,
     // Gateway
     startGateway,
     stopGateway,

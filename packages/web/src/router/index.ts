@@ -14,6 +14,8 @@ export const router = createRouter({
     { path: '/services', name: 'services' satisfies RouteKey, component: () => import('@/pages/ServicesPage.vue') },
     { path: '/logs', name: 'logs' satisfies RouteKey, component: () => import('@/pages/LogsPage.vue') },
     { path: '/settings', name: 'settings' satisfies RouteKey, component: () => import('@/pages/SettingsPage.vue') },
+    { path: '/nodes', name: 'nodes' satisfies RouteKey, component: () => import('@/pages/NodesPage.vue') },
+    { path: '/nodes/:id', name: 'nodeDetail' satisfies RouteKey, component: () => import('@/pages/NodeDetailPage.vue') },
     { path: '/profile', redirect: '/profiles' },
     { path: '/context', redirect: '/profiles' },
     { path: '/:pathMatch(.*)*', redirect: '/' },

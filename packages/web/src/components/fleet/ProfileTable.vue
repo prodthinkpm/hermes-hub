@@ -8,9 +8,16 @@ import UiButton from '@/components/ui/UiButton.vue'
 import PanelHeader from '@/components/ui/PanelHeader.vue'
 import type { ProfileRow } from '@/types/hub'
 
+const props = withDefaults(defineProps<{ filterNodeId?: string }>(), { filterNodeId: '' })
+
 const router = useRouter()
 const hubStore = useHubStore()
 const { profiles, isLoadingProfiles, profilesError } = storeToRefs(hubStore)
+
+const filteredProfiles = computed(() => {
+  if (!props.filterNodeId) return profiles.value
+  return profiles.value.filter((p) => p.desc === props.filterNodeId)
+})
 
 const rowBusyId = ref<string | null>(null)
 const rowError = ref<Record<string, string>>({})
@@ -109,9 +116,9 @@ async function deleteAgent(profile: ProfileRow): Promise<void> {
     <div class="overflow-auto">
       <div v-if="isLoadingProfiles" class="px-5 py-6 text-sm text-slate">Loading agents...</div>
       <div v-else-if="profilesError" class="px-5 py-6 text-sm text-danger">{{ profilesError }}</div>
-      <div v-else-if="profiles.length === 0" class="px-5 py-6 text-sm text-slate">No agents found. Configure scan paths in Settings first.</div>
+      <div v-else-if="filteredProfiles.length === 0" class="px-5 py-6 text-sm text-slate">No agents found. Configure scan paths in Settings first.</div>
 
-      <table v-if="!isLoadingProfiles && !profilesError && profiles.length > 0" class="min-w-[980px] w-full border-collapse">
+      <table v-if="!isLoadingProfiles && !profilesError && filteredProfiles.length > 0" class="min-w-[980px] w-full border-collapse">
         <thead>
           <tr class="bg-snow/[.035] text-left text-xs text-slate">
             <th class="border-b border-snow/10 px-[18px] py-[15px]">Agent</th>
@@ -125,7 +132,7 @@ async function deleteAgent(profile: ProfileRow): Promise<void> {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="profile in profiles" :key="profile.id" class="text-[13px] text-parchment">
+          <tr v-for="profile in filteredProfiles" :key="profile.id" class="text-[13px] text-parchment">
             <td class="border-b border-snow/10 px-[18px] py-[15px] align-top">
               <div class="flex items-start gap-3">
                 <div class="grid size-[38px] place-items-center rounded-md border border-signal/25 bg-signal/10 font-black text-signal">{{ profile.letter }}</div>

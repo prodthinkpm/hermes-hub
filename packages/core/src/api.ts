@@ -142,6 +142,22 @@ export class HermesApiClient {
     return this.get<HubNode[]>('/api/nodes')
   }
 
+  async getNode(id: string): Promise<HermesApiResponse<HubNode>> {
+    return this.get<HubNode>(`/api/nodes/${encodeURIComponent(id)}`)
+  }
+
+  async updateNode(id: string, fields: Partial<Pick<HubNode, 'name' | 'status' | 'tags'>>): Promise<HermesApiResponse<HubNode>> {
+    return this.put<HubNode>(`/api/nodes/${encodeURIComponent(id)}`, fields)
+  }
+
+  async deleteNode(id: string): Promise<HermesApiResponse<null>> {
+    return this.del<null>(`/api/nodes/${encodeURIComponent(id)}`)
+  }
+
+  async getRegistrationToken(): Promise<HermesApiResponse<{ token: string; enabled: boolean }>> {
+    return this.get<{ token: string; enabled: boolean }>('/api/settings/registration-token')
+  }
+
   async listAgents(): Promise<HermesApiResponse<ManagedAgent[]>> {
     return this.get<ManagedAgent[]>('/api/agents')
   }

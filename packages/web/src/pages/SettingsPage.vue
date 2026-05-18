@@ -1,23 +1,34 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { HermesApiClient } from '@hermes-hub/core'
+import { useHubStore } from '@/stores/hub'
 import SectionTitle from '@/components/ui/SectionTitle.vue'
 import UiButton from '@/components/ui/UiButton.vue'
 
 const api = new HermesApiClient()
+const hubStore = useHubStore()
 
 const paths = ref<string[]>([])
 const newPath = ref('')
 const saving = ref(false)
 const saved = ref(false)
 const saveError = ref('')
+const tokenCopied = ref(false)
 
 onMounted(async () => {
   const result = await api.getConfig()
   if (result.ok && result.data) {
     paths.value = [...result.data.paths]
   }
+  void hubStore.fetchRegistrationToken()
 })
+
+function copyToken() {
+  if (!hubStore.registrationToken) return
+  void navigator.clipboard.writeText(hubStore.registrationToken)
+  tokenCopied.value = true
+  setTimeout(() => { tokenCopied.value = false }, 2000)
+}
 
 function addPath() {
   const val = newPath.value.trim()
@@ -89,6 +100,22 @@ async function save() {
         <span v-if="saved" class="text-[13px] text-signal font-bold">已保存</span>
       </div>
       <p v-if="saveError" class="mt-2 text-sm text-danger">{{ saveError }}</p>
+    </div>
+
+    <!-- Registration Token -->
+    <div class="mb-5 app-panel p-5">
+      <label class="mb-2 block text-[13px] font-extrabold text-snow">Registration Token</label>
+      <p class="mb-3 text-xs text-slate">Hub Agents must include this token when registering with the server.</p>
+      <div class="flex items-center gap-2">
+        <input
+          :value="hubStore.registrationToken || '(no token configured)'"
+          readonly
+          class="h-11 flex-1 rounded-md border border-snow/10 bg-snow/[.035] px-3 text-sm text-parchment font-mono outline-none"
+        />
+        <UiButton :disabled="!hubStore.registrationToken" @click="copyToken">
+          {{ tokenCopied ? 'Copied' : 'Copy' }}
+        </UiButton>
+      </div>
     </div>
   </div>
 </template>

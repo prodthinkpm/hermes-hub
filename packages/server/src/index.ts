@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { existsSync, readFileSync } from 'node:fs'
 import { extname, resolve } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type {
   CommandResultRequest,
   CommandType,
@@ -21,6 +22,8 @@ import {
   getAllAgents,
   upsertAgent,
   deleteAgentsForNode,
+  deleteNode,
+  updateNodeFields,
   getCommand,
   getAllCommands,
   upsertCommand,
@@ -33,6 +36,8 @@ import {
   getLogsForNode,
   getLogsForCommand,
   insertLog,
+  getMetadataValue,
+  setMetadataValue,
 } from './database.js'
 
 export interface ServerOptions {
@@ -40,7 +45,11 @@ export interface ServerOptions {
   apiUrl?: string
   staticDir?: string
   dbPath?: string  // SQLite 数据库路径，默认 ~/.hermes-hub/hub.db
+  registrationToken?: string  // 注册 token，未提供则自动生成
 }
+
+// Module-level registration token (set during startServer)
+let resolvedToken: string | undefined
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -414,6 +423,11 @@ async function handleHubAgentApi(
       jsonReply(res, 400, { ok: false, error: 'Invalid register payload' })
       return true
     }
+    // Token 校验：若配置了 token，注册请求必须携带正确 token
+    if (resolvedToken && registerBody.token !== resolvedToken) {
+      jsonReply(res, 401, { ok: false, error: 'Invalid or missing registration token' })
+      return true
+    }
     const node = upsertNode(db, registerBody)
     jsonReply(res, 200, {
       ok: true,
@@ -623,6 +637,71 @@ async function handlePublicApi(
       return true
     }
     jsonReply(res, 200, { ok: true, data: getAllNodes(db) })
+    return true
+  }
+
+  // Node detail CRUD (Phase 8)
+  const nodeDetailMatch = path.match(/^\/api\/nodes\/([^/]+)$/)
+  if (nodeDetailMatch) {
+    const nodeId = decodeURIComponent(nodeDetailMatch[1])
+
+    if (method === 'GET') {
+      const node = getNode(db, nodeId)
+      if (!node) {
+        jsonReply(res, 404, { ok: false, error: `Node '${nodeId}' not found` })
+        return true
+      }
+      jsonReply(res, 200, { ok: true, data: node })
+      return true
+    }
+
+    if (method === 'PUT') {
+      let body: unknown
+      try { body = await readJsonBody(req) } catch {
+        jsonReply(res, 400, { ok: false, error: 'Invalid JSON body' })
+        return true
+      }
+      if (!isObject(body)) {
+        jsonReply(res, 400, { ok: false, error: 'Invalid body' })
+        return true
+      }
+      const update: Record<string, unknown> = {}
+      if (typeof body.name === 'string' && body.name.trim()) update.name = body.name.trim()
+      if (typeof body.status === 'string' && ['online', 'offline', 'unhealthy', 'disabled'].includes(body.status)) {
+        update.status = body.status
+      }
+      if (Array.isArray(body.tags)) update.tags = body.tags.filter((t: unknown) => typeof t === 'string')
+      if (Object.keys(update).length === 0) {
+        jsonReply(res, 400, { ok: false, error: 'No valid fields to update (name, status, tags)' })
+        return true
+      }
+      const updated = updateNodeFields(db, nodeId, update as Partial<Pick<HubNode, 'name' | 'status' | 'tags'>>)
+      if (!updated) {
+        jsonReply(res, 404, { ok: false, error: `Node '${nodeId}' not found` })
+        return true
+      }
+      insertLog(db, 'info', `Node '${nodeId}' updated: ${JSON.stringify(update)}`, 'hub')
+      jsonReply(res, 200, { ok: true, data: updated })
+      return true
+    }
+
+    if (method === 'DELETE') {
+      const node = getNode(db, nodeId)
+      if (!node) {
+        jsonReply(res, 404, { ok: false, error: `Node '${nodeId}' not found` })
+        return true
+      }
+      if (node.status === 'online') {
+        jsonReply(res, 400, { ok: false, error: 'Cannot delete an online node. Disable it first or wait for it to go offline.' })
+        return true
+      }
+      deleteNode(db, nodeId)
+      insertLog(db, 'warn', `Node '${nodeId}' deleted`, 'hub')
+      jsonReply(res, 200, { ok: true, data: null })
+      return true
+    }
+
+    jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
     return true
   }
 
@@ -931,6 +1010,16 @@ async function handlePublicApi(
     return true
   }
 
+  // Registration token (Phase 8)
+  if (path === '/api/settings/registration-token' || path === '/api/settings/registration-token/') {
+    if (method !== 'GET') {
+      jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
+      return true
+    }
+    jsonReply(res, 200, { ok: true, data: { token: resolvedToken ?? '', enabled: Boolean(resolvedToken) } })
+    return true
+  }
+
   return false
 }
 
@@ -979,6 +1068,14 @@ async function handleRequest(
 export function startServer(opts: ServerOptions): ReturnType<typeof createServer> {
   // 初始化 SQLite 数据库，持久化 path 默认为 ~/.hermes-hub/hub.db
   const db = initDatabase(opts.dbPath)
+
+  // 注册 token：优先使用传入值，否则从 metadata 读取，最后自动生成
+  resolvedToken = opts.registrationToken ?? getMetadataValue(db, 'registration_token') ?? undefined
+  if (!resolvedToken) {
+    resolvedToken = randomUUID()
+    setMetadataValue(db, 'registration_token', resolvedToken)
+    console.log(`[hermes-hub] Generated registration token: ${resolvedToken}`)
+  }
 
   const server = createServer((req, res) => {
     void handleRequest(req, res, opts, db)
