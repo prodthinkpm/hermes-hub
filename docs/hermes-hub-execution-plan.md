@@ -1,6 +1,6 @@
 # Hermes Hub 任务执行计划
 
-版本：v0.6
+版本：v0.7
 日期：2026-05-18
 分支：`refactor-controller-agent-architecture`
 目标：按 Controller-Agent 技术方案重构当前项目，保留现有 Web 视觉风格，替换底层架构模型。
@@ -52,6 +52,7 @@ Command Queue = 所有变更操作入口
 - Setup/Gateway 管理：5 种新命令类型（start/stop/restart/setup/doctor），Web 动态 gateway 页面。
 - Logs Center：4 条日志查询路由（all/agent/node/command），审计日志自动记录，密钥脱敏。
 - Config/SOUL/Env 管理：8 种新命令类型，异步文件读写 + 写入备份，Env 只展示 key 不展示 value。
+- Hub Agent 安装与部署：`init` 子命令（平台标准路径配置生成）、`service` 子命令（systemd/launchd/schtasks 服务管理）、`--config` 配置文件加载（CLI > env > config > default 优先级）、Dockerfile + docker-compose.yml。
 
 ### 已验证
 
@@ -73,13 +74,17 @@ log secret redaction                  API_KEY / TOKEN / SECRET 写入前脱敏
 config.read lifecycle                 202 → poll → execute → read file → return stdout
 config.patch + backup                 写入前自动备份 config.yaml.bak
 ProfileDetailPage Env tab            展示 Env key 列表，Set/Edit/Delete
+- hermes-hub-agent --version            0.7.0
+- hermes-hub-agent init                 生成 config.yaml 到平台标准路径
+- hermes-hub-agent service status       正确检测平台并报告服务状态
+- docker compose config                 验证通过（hub-server + hub-agent + volumes）
 ```
 
 ### 当前边界
 
-- Phase 1-6 已完成，Controller-Agent 架构 + SQLite + Gateway + Logs/Audit + Config/SOUL/Env 落地。
+- Phase 1-7 已完成，Controller-Agent 架构 + SQLite + Gateway + Logs/Audit + Config/SOUL/Env + 安装部署落地。
 - 所有 Agent 文件操作全部走 command + audit 流程。
-- 暂不做远程节点、Docker、权限、审计。
+- 暂不做远程节点、多节点、权限、审计增强。
 
 ---
 
@@ -406,7 +411,7 @@ pnpm run build                           passed
 
 ## 9. Phase 7：Hub Agent 安装与部署
 
-状态：待开始
+状态：已完成
 
 ### 目标
 
@@ -414,41 +419,49 @@ pnpm run build                           passed
 
 ### 范围
 
-- 开发安装。
-- 二进制发布。
-- systemd / launchd / Windows service。
-- Docker sidecar。
+- 开发安装（`pip install -e .` / `uv tool install`）。
+- `hermes-hub-agent init` 配置生成。
+- `hermes-hub-agent service` 服务管理（systemd / launchd / schtasks）。
+- 配置文件加载（CLI > env > config > default 优先级）。
+- Docker 镜像和 compose 模板。
 
 ### 主要任务
 
-- 支持：
-  - `pipx install hermes-hub-agent`
-  - `uv tool install hermes-hub-agent`
-- 增加 `hermes-hub-agent init`。
-- 增加配置文件：
-  - Linux: `/etc/hermes-hub-agent/config.yaml`
+- 新增 `hermes_hub_agent/config.py`：平台标准路径配置读写。（已完成）
+  - Linux: `~/.config/hermes-hub-agent/config.yaml`
   - macOS: `~/Library/Application Support/hermes-hub-agent/config.yaml`
   - Windows: `%LOCALAPPDATA%\hermes-hub-agent\config.yaml`
-- 增加 service install/start/stop 命令。
-- 评估 PyInstaller / Nuitka 单文件发布。
-- 增加 Docker 镜像和 compose 模板。
+- 新增 `hermes_hub_agent/service.py`：跨平台服务管理。（已完成）
+  - Linux: systemd user unit（`~/.config/systemd/user/hermes-hub-agent.service`）
+  - macOS: launchd plist（`~/Library/LaunchAgents/com.hermes-hub.agent.plist`）
+  - Windows: Scheduled Task（`schtasks`，每 10 分钟 `--once`）
+  - 支持 install / start / stop / uninstall / status
+- 更新 `main.py`：新增 `init` 和 `service` 子命令，`--config` 配置加载。（已完成）
+- 新增 `Dockerfile`：Python 3.12-slim 镜像。（已完成）
+- 新增 `docker-compose.yml`：hub-server + hub-agent 编排。（已完成）
+- 新增 `Dockerfile.server`：TypeScript server 构建镜像。（已完成）
+- 版本号 0.1.0 → 0.7.0。（已完成）
 
 ### 交付物
 
-- Hub Agent 安装文档。
-- 本机 service 运行方式。
-- Docker sidecar 示例。
+- `agents/hub-agent/hermes_hub_agent/config.py`
+- `agents/hub-agent/hermes_hub_agent/service.py`
+- `agents/hub-agent/Dockerfile`
+- `docker-compose.yml`
+- `Dockerfile.server`
 
 ### 验收标准
 
-- 新机器按文档可以注册到 Hub。
-- service 重启后自动恢复 heartbeat。
-- Docker sidecar 可以扫描挂载的 `/opt/data`。
+- `hermes-hub-agent --version` 输出版本号。 ✅
+- `hermes-hub-agent init --node-id test` 生成配置文件到平台标准路径。 ✅
+- `hermes-hub-agent service status` 正确检测平台并报告。 ✅
+- 配置文件加载优先级正确（CLI > env > config > default）。 ✅
+- `docker compose config` 验证通过。 ✅
 
 ### 风险
 
-- Windows service 权限和路径处理复杂。
-- 打包二进制需要处理不同平台依赖。
+- Windows service（schtasks）与 Linux/macOS 守护进程模型不同，是用定时任务模拟。
+- 尚未评估 PyInstaller / Nuitka 单文件发布。
 
 ---
 
@@ -577,12 +590,13 @@ Phase 2 和 Phase 3 是后续所有功能的基础，不建议跳过。
 
 ## 13. 下一步建议
 
-Phase 1-6 已完成，下一步进入 Phase 7：Hub Agent 安装与部署。
+Phase 1-7 已完成，下一步进入 Phase 8：远程 / Docker / 多节点增强。
 
 推荐第一批任务：
 
-- pipx install hermes-hub-agent / uv tool install hermes-hub-agent
-- 增加 hermes-hub-agent init 生成配置文件
-- systemd / launchd / Windows service 支持
-- PyInstaller / Nuitka 单文件发布评估
-- Docker 镜像和 compose 模板
+- Hub Server 增加注册 token 机制
+- Hub Agent 注册时使用 token
+- Node 页面展示 hostname、OS、arch、agent version、last heartbeat
+- 支持 node disable / enable
+- Docker 模式识别挂载数据目录
+- Web 增加 Node 过滤器

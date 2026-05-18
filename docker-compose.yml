@@ -1,0 +1,25 @@
+services:
+  hub-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    ports:
+      - '3000:3000'
+    volumes:
+      - hub-data:/root/.hermes-hub
+    restart: unless-stopped
+
+  hub-agent:
+    build:
+      context: ./agents/hub-agent
+    environment:
+      - HERMES_HUB_URL=http://hub-server:3000
+      - HERMES_NODE_ID=docker-node
+      - HERMES_HOME=/data
+    volumes:
+      - agent-data:/data
+    restart: unless-stopped
+
+volumes:
+  hub-data:
+  agent-data:
