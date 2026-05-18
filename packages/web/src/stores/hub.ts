@@ -1,11 +1,13 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { HermesApiClient, type CreateProfilePayload, type LogEntry, type ProfileRow } from '@hermes-hub/core'
+import { HermesApiClient, type CreateProfilePayload, type HubNode, type LogEntry, type ManagedAgent, type ProfileRow } from '@hermes-hub/core'
 
 const api = new HermesApiClient()
 
 export const useHubStore = defineStore('hub', () => {
   const profiles = ref<ProfileRow[]>([])
+  const nodes = ref<HubNode[]>([])
+  const agents = ref<ManagedAgent[]>([])
   const logs = ref<LogEntry[]>([])
   const toastVisible = ref(false)
   const toastTitle = ref('Submitted')
@@ -13,6 +15,7 @@ export const useHubStore = defineStore('hub', () => {
   const isLoadingProfiles = ref(false)
   const isLoadingLogs = ref(false)
   const profilesError = ref<string | null>(null)
+  const nodesError = ref<string | null>(null)
   const logsError = ref<string | null>(null)
   const hubStatus = ref('running')
   const hubVersion = ref('--')
@@ -36,15 +39,25 @@ export const useHubStore = defineStore('hub', () => {
     profilesError.value = null
 
     const previousChecked = new Map(profiles.value.map((profile) => [profile.id, profile.checked]))
-    const result = await api.listProfiles()
+    const [agentResult, nodeResult] = await Promise.all([api.listAgents(), api.listNodes()])
 
-    if (result.ok && result.data) {
-      profiles.value = result.data.map((profile) => ({
+    if (nodeResult.ok && nodeResult.data) {
+      nodes.value = nodeResult.data
+      nodesError.value = null
+    } else {
+      nodes.value = []
+      nodesError.value = nodeResult.error ?? 'Failed to fetch nodes'
+    }
+
+    if (agentResult.ok && agentResult.data) {
+      agents.value = agentResult.data
+      profiles.value = agentResult.data.map((agent) => api.agentToProfileRow(agent)).map((profile) => ({
         ...profile,
         checked: previousChecked.get(profile.id) ?? false,
       }))
     } else {
-      profilesError.value = result.error ?? 'Failed to fetch agents'
+      agents.value = []
+      profilesError.value = agentResult.error ?? 'Failed to fetch agents'
       profiles.value = []
     }
 
@@ -57,25 +70,61 @@ export const useHubStore = defineStore('hub', () => {
     return result.data
   }
 
-  async function createAgent(payload: CreateProfilePayload): Promise<{ ok: boolean; error?: string; steps?: string[] }> {
+  async function createAgent(payload: CreateProfilePayload): Promise<{ ok: boolean; error?: string; steps?: string[]; commandId?: string }> {
     const result = await api.createProfile(payload)
     if (!result.ok || !result.data) {
-      return { ok: false, error: result.error ?? 'Failed to create agent' }
+      return { ok: false, error: result.error ?? 'Failed to queue create command' }
+    }
+    const commandId = result.data.commandId
+    // 等待 Hub Agent 执行完成后检查命令结果
+    const finalCmd = await api.waitForCommand(commandId)
+    if (finalCmd.ok && finalCmd.data) {
+      if (finalCmd.data.status === 'failed') {
+        return { ok: false, error: finalCmd.data.stderr || finalCmd.data.error || 'Create command failed' }
+      }
+      if (finalCmd.data.status === 'timeout') {
+        return { ok: false, error: finalCmd.data.error || 'Create command timed out' }
+      }
     }
     await fetchProfiles()
-    return { ok: true, steps: result.data.nextSteps }
+    return { ok: true, steps: result.data.nextSteps, commandId }
   }
 
-  async function renameAgent(id: string, name: string): Promise<{ ok: boolean; error?: string }> {
+  async function renameAgent(id: string, name: string): Promise<{ ok: boolean; error?: string; commandId?: string }> {
     const result = await api.renameProfile(id, name)
-    if (!result.ok) return { ok: false, error: result.error ?? 'Failed to rename agent' }
+    if (!result.ok) return { ok: false, error: result.error ?? 'Failed to queue rename command' }
+    const commandId = result.data?.commandId
+    if (!commandId) return { ok: false, error: 'No command ID returned' }
+    // 等待 Hub Agent 执行完成后检查命令结果
+    const finalCmd = await api.waitForCommand(commandId)
+    if (finalCmd.ok && finalCmd.data) {
+      if (finalCmd.data.status === 'failed') {
+        return { ok: false, error: finalCmd.data.stderr || finalCmd.data.error || 'Rename command failed' }
+      }
+      if (finalCmd.data.status === 'timeout') {
+        return { ok: false, error: finalCmd.data.error || 'Rename command timed out' }
+      }
+    }
     await fetchProfiles()
-    return { ok: true }
+    return { ok: true, commandId }
   }
 
   async function deleteAgent(id: string): Promise<{ ok: boolean; error?: string }> {
     const result = await api.deleteProfile(id)
-    if (!result.ok) return { ok: false, error: result.error ?? 'Failed to delete agent' }
+    if (!result.ok) return { ok: false, error: result.error ?? 'Failed to queue delete command' }
+    const commandId = result.data?.commandId
+    if (commandId) {
+      // 等待 Hub Agent 执行完成后检查命令结果
+      const finalCmd = await api.waitForCommand(commandId)
+      if (finalCmd.ok && finalCmd.data) {
+        if (finalCmd.data.status === 'failed') {
+          return { ok: false, error: finalCmd.data.stderr || finalCmd.data.error || 'Delete command failed' }
+        }
+        if (finalCmd.data.status === 'timeout') {
+          return { ok: false, error: finalCmd.data.error || 'Delete command timed out' }
+        }
+      }
+    }
     await fetchProfiles()
     return { ok: true }
   }
@@ -155,6 +204,8 @@ export const useHubStore = defineStore('hub', () => {
 
   return {
     profiles,
+    nodes,
+    agents,
     logs,
     toastVisible,
     toastTitle,
@@ -162,6 +213,7 @@ export const useHubStore = defineStore('hub', () => {
     isLoadingProfiles,
     isLoadingLogs,
     profilesError,
+    nodesError,
     logsError,
     selectedCount,
     hubStatus,

@@ -63,7 +63,7 @@ async function submitRenameDialog(): Promise<void> {
       rowError.value[profile.id] = result.error ?? 'Rename failed'
       return
     }
-    hubStore.showToast('Agent renamed', `${profile.name} -> ${nextName}`)
+    hubStore.showToast('Rename queued', `${profile.name} -> ${nextName}${result.commandId ? ` (${result.commandId})` : ''}`)
     closeRenameDialog()
   } finally {
     rowBusyId.value = null
@@ -89,7 +89,7 @@ async function deleteAgent(profile: ProfileRow): Promise<void> {
       rowError.value[profile.id] = result.error ?? 'Delete failed'
       return
     }
-    hubStore.showToast('Agent deleted', `${profile.name} was deleted`)
+    hubStore.showToast('Delete queued', `${profile.name} will be removed by Hub Agent.`)
   } finally {
     rowBusyId.value = null
   }
@@ -173,7 +173,7 @@ async function deleteAgent(profile: ProfileRow): Promise<void> {
                   :disabled="rowBusyId === profile.id"
                   @click="deleteAgent(profile)"
                 >
-                  {{ rowBusyId === profile.id ? 'Deleting...' : 'Delete' }}
+                  {{ rowBusyId === profile.id ? 'Queueing...' : 'Delete' }}
                 </button>
               </div>
             </td>

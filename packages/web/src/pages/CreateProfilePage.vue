@@ -64,7 +64,7 @@ async function createAgent(): Promise<void> {
     createdSteps.value = result.steps ?? []
     const created = profiles.value.find((p) => p.name === payload.name)
     createdProfileId.value = created?.id ?? null
-    hubStore.showToast('Agent created', `${payload.name} is ready. Next: run setup.`)
+    hubStore.showToast('Create queued', `${payload.name} will appear after Hub Agent completes the command.`)
   } finally {
     creating.value = false
   }
@@ -90,7 +90,7 @@ onMounted(() => {
         </button>
       </template>
       <template #title>Create Hermes Agent</template>
-      <template #subtitle>Create a profile through Hermes CLI semantics, then run setup.</template>
+      <template #subtitle>Queue a profile.create command for the selected Hub Agent worker.</template>
       <template #actions>
         <UiButton :disabled="submitDisabled" variant="primary" @click="createAgent">
           {{ creating ? 'Creating...' : 'Create Agent' }}
@@ -137,7 +137,7 @@ onMounted(() => {
           <UiButton :disabled="submitDisabled" variant="primary" @click="createAgent">{{ creating ? 'Creating...' : 'Create Agent' }}</UiButton>
           <UiButton :disabled="!createdProfileId" @click="goToCreatedAgent">Open Agent Detail</UiButton>
           <span v-if="createError" class="text-sm text-danger">{{ createError }}</span>
-          <span v-if="!createError && createdSteps.length > 0" class="text-sm text-mint">Created successfully.</span>
+          <span v-if="!createError && createdSteps.length > 0" class="text-sm text-mint">Command queued.</span>
         </div>
       </section>
 
@@ -150,7 +150,7 @@ onMounted(() => {
         <div class="note-card">
           <h4>Recommended setup</h4>
           <CommandBox>hermes -p &lt;name&gt; setup</CommandBox>
-          <p class="mt-2">After setup, you can run chat/gateway with the same profile.</p>
+          <p class="mt-2">After the create command succeeds, run setup with the same profile.</p>
         </div>
         <div v-if="createdSteps.length > 0" class="note-card">
           <h4>Next commands</h4>

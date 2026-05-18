@@ -1,0 +1,13 @@
+[project]
+name = "hermes-hub-agent"
+version = "0.1.0"
+description = "Hermes Hub node worker for local Hermes profile discovery."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+hermes-hub-agent = "hermes_hub_agent.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

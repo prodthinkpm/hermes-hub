@@ -15,6 +15,9 @@
     "build": "node -e \"require('fs').cpSync('../web/dist','dist/static',{recursive:true})\" && tsc",
     "prepublishOnly": "pnpm -F @hermes-hub/web build && npm run build"
   },
+  "dependencies": {
+    "@hermes-hub/server": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^25.8.0",
     "typescript": "^6.0.3"

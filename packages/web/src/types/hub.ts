@@ -1,5 +1,13 @@
 // Re-export shared domain types from @hermes-hub/core
-export { type ProfileRow, type BadgeTone, type HermesApiResponse, type LogEntry, type LogTone } from '@hermes-hub/core'
+export {
+  type ProfileRow,
+  type BadgeTone,
+  type HermesApiResponse,
+  type LogEntry,
+  type LogTone,
+  type HubNode,
+  type ManagedAgent,
+} from '@hermes-hub/core'
 
 export type RouteKey = 'dashboard' | 'profiles' | 'create' | 'profile' | 'profileLogs' | 'services' | 'logs' | 'settings'
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-import { startServer } from './server.js'
+import { startServer } from '@hermes-hub/server'
 import { exec } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { resolve } from 'node:path'
 
 function parseArgs(): { port: number; apiUrl: string; open: boolean } {
   const args = process.argv.slice(2)
@@ -50,7 +52,8 @@ Options:
 }
 
 const opts = parseArgs()
-startServer(opts)
+const staticDir = resolve(fileURLToPath(new URL('.', import.meta.url)), 'static')
+startServer({ ...opts, staticDir })
 
 if (opts.open) {
   const url = `http://localhost:${opts.port}`

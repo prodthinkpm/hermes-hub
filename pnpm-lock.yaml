@@ -9,6 +9,10 @@ importers:
   .: {}
 
   packages/cli:
+    dependencies:
+      '@hermes-hub/server':
+        specifier: workspace:*
+        version: link:../server
     devDependencies:
       '@types/node':
         specifier: ^25.8.0
@@ -18,7 +22,30 @@ importers:
         version: 6.0.3
 
   packages/core:
+    dependencies:
+      '@hermes-hub/protocol':
+        specifier: workspace:*
+        version: link:../protocol
     devDependencies:
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  packages/protocol:
+    devDependencies:
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  packages/server:
+    dependencies:
+      '@hermes-hub/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@types/node':
+        specifier: ^25.8.0
+        version: 25.8.0
       typescript:
         specifier: ^6.0.3
         version: 6.0.3

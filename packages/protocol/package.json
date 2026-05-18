@@ -1,5 +1,5 @@
 {
-  "name": "@hermes-hub/core",
+  "name": "@hermes-hub/protocol",
   "version": "1.0.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -10,9 +10,6 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch"
-  },
-  "dependencies": {
-    "@hermes-hub/protocol": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^6.0.3"

@@ -2,6 +2,16 @@ export type BadgeTone = 'running' | 'stopped' | 'warn' | 'bad' | 'info' | 'purpl
 export type LogTone = '' | 'ok' | 'err' | 'yellow'
 export type ProfileKind = 'default' | 'profile'
 
+export type {
+  HubNode,
+  HubCommand,
+  ManagedAgent,
+  NodeStatus,
+  AgentSetupStatus,
+  AgentRuntimeStatus,
+  AgentApiStatus,
+} from '@hermes-hub/protocol'
+
 export interface ProfileRow {
   id: string
   kind: ProfileKind

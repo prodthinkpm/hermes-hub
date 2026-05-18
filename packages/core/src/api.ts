@@ -1,4 +1,4 @@
-import type { HermesApiResponse, LogEntry, ProfileRow } from './types'
+import type { HermesApiResponse, HubCommand, HubNode, LogEntry, ManagedAgent, ProfileRow } from './types'
 
 export interface HubConfig {
   paths: string[]
@@ -13,13 +13,16 @@ export interface CreateProfilePayload {
 
 export interface CreateProfileResult {
   name: string
-  stdout: string
+  commandId: string
+  status: HubCommand['status']
+  stdout?: string
   nextSteps: string[]
 }
 
 export interface RenameProfileResult {
   name: string
   renamed: boolean
+  commandId?: string
 }
 
 export class HermesApiClient {
@@ -33,13 +36,24 @@ export class HermesApiClient {
     return { ok: true, data: payload as T }
   }
 
+  private async parseErrorResponse(res: Response): Promise<HermesApiResponse<never>> {
+    try {
+      const payload = await res.json()
+      const envelope = this.parseEnvelope<never>(payload)
+      if (!envelope.ok) return envelope
+    } catch {
+      // Fall through to the generic HTTP message.
+    }
+    return { ok: false, error: `HTTP ${res.status}: ${res.statusText}` }
+  }
+
   private async get<T>(path: string): Promise<HermesApiResponse<T>> {
     try {
       const res = await fetch(`${this.baseUrl}${path}`, {
         headers: { Accept: 'application/json' },
       })
       if (!res.ok) {
-        return { ok: false, error: `HTTP ${res.status}: ${res.statusText}` }
+        return this.parseErrorResponse(res)
       }
       const payload = await res.json()
       return this.parseEnvelope<T>(payload)
@@ -54,7 +68,7 @@ export class HermesApiClient {
         headers: { Accept: 'text/plain, text/markdown, text/yaml, application/json' },
       })
       if (!res.ok) {
-        return { ok: false, error: `HTTP ${res.status}: ${res.statusText}` }
+        return this.parseErrorResponse(res)
       }
       return { ok: true, data: await res.text() }
     } catch (err) {
@@ -70,7 +84,7 @@ export class HermesApiClient {
         body: JSON.stringify(body),
       })
       if (!res.ok) {
-        return { ok: false, error: `HTTP ${res.status}: ${res.statusText}` }
+        return this.parseErrorResponse(res)
       }
       const payload = await res.json()
       return this.parseEnvelope<T>(payload)
@@ -87,7 +101,7 @@ export class HermesApiClient {
         body: JSON.stringify(body),
       })
       if (!res.ok) {
-        return { ok: false, error: `HTTP ${res.status}: ${res.statusText}` }
+        return this.parseErrorResponse(res)
       }
       const payload = await res.json()
       return this.parseEnvelope<T>(payload)
@@ -103,7 +117,7 @@ export class HermesApiClient {
         headers: { Accept: 'application/json' },
       })
       if (!res.ok) {
-        return { ok: false, error: `HTTP ${res.status}: ${res.statusText}` }
+        return this.parseErrorResponse(res)
       }
       const payload = await res.json()
       return this.parseEnvelope<T>(payload)
@@ -113,23 +127,82 @@ export class HermesApiClient {
   }
 
   async listProfiles(): Promise<HermesApiResponse<ProfileRow[]>> {
-    return this.get<ProfileRow[]>('/api/profiles')
+    const result = await this.listAgents()
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to fetch agents' }
+    return { ok: true, data: result.data.map((agent) => this.agentToProfileRow(agent)) }
   }
 
   async getProfile(id: string): Promise<HermesApiResponse<ProfileRow>> {
-    return this.get<ProfileRow>(`/api/profiles/${encodeURIComponent(id)}`)
+    const result = await this.getAgent(id)
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to fetch agent' }
+    return { ok: true, data: this.agentToProfileRow(result.data) }
+  }
+
+  async listNodes(): Promise<HermesApiResponse<HubNode[]>> {
+    return this.get<HubNode[]>('/api/nodes')
+  }
+
+  async listAgents(): Promise<HermesApiResponse<ManagedAgent[]>> {
+    return this.get<ManagedAgent[]>('/api/agents')
+  }
+
+  async getAgent(id: string): Promise<HermesApiResponse<ManagedAgent>> {
+    return this.get<ManagedAgent>(`/api/agents/${encodeURIComponent(id)}`)
   }
 
   async createProfile(payload: CreateProfilePayload): Promise<HermesApiResponse<CreateProfileResult>> {
-    return this.post<CreateProfileResult>('/api/profiles', payload)
+    const result = await this.post<HubCommand>('/api/profiles', payload)
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue create command' }
+    return {
+      ok: true,
+      data: {
+        name: payload.name,
+        commandId: result.data.id,
+        status: result.data.status,
+        nextSteps: [`Command queued: ${result.data.id}`, 'Waiting for Hub Agent heartbeat to refresh agents.'],
+      },
+    }
   }
 
   async renameProfile(id: string, name: string): Promise<HermesApiResponse<RenameProfileResult>> {
-    return this.put<RenameProfileResult>(`/api/profiles/${encodeURIComponent(id)}/rename`, { name })
+    const result = await this.put<HubCommand>(`/api/profiles/${encodeURIComponent(id)}/rename`, { name })
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue rename command' }
+    return { ok: true, data: { name, renamed: false, commandId: result.data.id } }
   }
 
-  async deleteProfile(id: string): Promise<HermesApiResponse<null>> {
-    return this.del<null>(`/api/profiles/${encodeURIComponent(id)}`)
+  async deleteProfile(id: string): Promise<HermesApiResponse<{ commandId: string }>> {
+    const result = await this.del<HubCommand>(`/api/profiles/${encodeURIComponent(id)}`)
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue delete command' }
+    return { ok: true, data: { commandId: result.data.id } }
+  }
+
+  async listCommands(): Promise<HermesApiResponse<HubCommand[]>> {
+    return this.get<HubCommand[]>('/api/commands')
+  }
+
+  async getCommand(id: string): Promise<HermesApiResponse<HubCommand>> {
+    return this.get<HubCommand>(`/api/commands/${encodeURIComponent(id)}`)
+  }
+
+  // 轮询命令直到到达终态（success/failed/timeout/cancelled）
+  async waitForCommand(id: string, maxWaitMs = 30_000): Promise<HermesApiResponse<HubCommand>> {
+    const deadline = Date.now() + maxWaitMs
+    let lastError: string | undefined
+    while (Date.now() < deadline) {
+      const result = await this.getCommand(id)
+      if (!result.ok || !result.data) {
+        lastError = result.error
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+        continue
+      }
+      const command = result.data
+      // 终态：success, failed, timeout, cancelled
+      if (command.status === 'success' || command.status === 'failed' || command.status === 'timeout' || command.status === 'cancelled') {
+        return { ok: true, data: command }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+    }
+    return { ok: false, error: lastError ?? `Command '${id}' did not complete within ${maxWaitMs / 1000}s` }
   }
 
   async getProfileConfig(id: string): Promise<HermesApiResponse<string>> {
@@ -166,5 +239,39 @@ export class HermesApiClient {
 
   async listProfileLogs(id: string): Promise<HermesApiResponse<LogEntry[]>> {
     return this.get<LogEntry[]>(`/api/profiles/${encodeURIComponent(id)}/logs`)
+  }
+
+  agentToProfileRow(agent: ManagedAgent): ProfileRow {
+    const kind = agent.profileName === 'default' ? 'default' : 'profile'
+    const name = agent.displayName || (kind === 'default' ? 'hermes' : agent.profileName)
+    return {
+      id: agent.id,
+      kind,
+      checked: false,
+      letter: name[0]?.toUpperCase() ?? '?',
+      name,
+      desc: agent.nodeId,
+      setupTone: this.statusTone(agent.setupStatus),
+      setupText: agent.setupStatus,
+      gatewayTone: this.statusTone(agent.gatewayStatus),
+      gatewayText: agent.gatewayStatus,
+      apiTone: this.statusTone(agent.apiServerStatus),
+      apiText: agent.apiServerStatus,
+      model: this.modelLabel(agent.provider, agent.model),
+      home: agent.profileHome,
+    }
+  }
+
+  private statusTone(status: string): ProfileRow['setupTone'] {
+    if (status === 'ready' || status === 'running' || status === 'enabled') return 'running'
+    if (status === 'failed') return 'bad'
+    if (status === 'stopped' || status === 'disabled') return 'stopped'
+    return 'warn'
+  }
+
+  private modelLabel(provider?: string, model?: string): string {
+    if (!model) return ''
+    if (!provider) return model
+    return model.toLowerCase().startsWith(`${provider.toLowerCase()}:`) ? model : `${provider}:${model}`
   }
 }
