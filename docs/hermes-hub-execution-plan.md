@@ -1,8 +1,8 @@
 # Hermes Hub 任务执行计划
 
-版本：v0.1  
-日期：2026-05-18  
-分支：`refactor-controller-agent-architecture`  
+版本：v0.2
+日期：2026-05-18
+分支：`refactor-controller-agent-architecture`
 目标：按 Controller-Agent 技术方案重构当前项目，保留现有 Web 视觉风格，替换底层架构模型。
 
 ---
@@ -44,21 +44,30 @@ Command Queue = 所有变更操作入口
 - CLI 已切换为启动新的 Hub Server。
 - Web Agents 页已展示 Nodes + Managed Agents。
 - Hub Agent 可注册 `local` node、发送 heartbeat、扫描 Hermes profiles。
+- Command Queue 最小闭环：4 种命令类型（scan/create/rename/delete）全部走异步 command 流程。
+- Agent 写操作串行化：同一 agent 同时只允许一个写命令运行。
+- 命令超时处理：server 心跳检测 + Hub Agent subprocess timeout，默认 300s。
+- 命令结果轮询：Web 操作后等待命令完成，失败时展示 Hermes CLI 的 stderr 错误。
 
 ### 已验证
 
 ```text
-pnpm run build    passed
-python syntax ok  passed
-/api/nodes        returned 1 node
-/api/agents       returned 3 agents
+pnpm run build                        passed
+python syntax ok                      passed
+/api/nodes                            returned 1 node
+/api/agents                           returned 3 agents
+profile.scan lifecycle                pending -> dispatched -> running -> success
+agent write serialization             同一 agent 不会同时执行两个写命令
+command timeout detection             running 超时自动标记 timeout
+command error display                 Rename 失败时 Web 展示 stderr
 ```
 
 ### 当前边界
 
-- Phase 1 只做 Controller-Agent 最小闭环。
-- 暂不做 create / rename / delete / setup / gateway 操作。
+- Phase 1-2 已完成，Controller-Agent 架构落地。
+- create / rename / delete 已走 command 流程。
 - 暂不引入数据库，Hub Server 使用内存状态。
+- 暂不做 setup / doctor / gateway 管理操作。
 - 暂不做远程节点、Docker、权限、审计。
 
 ---
@@ -114,7 +123,7 @@ python syntax ok  passed
 
 ## 4. Phase 2：Command Queue 与 Profile 管理迁移
 
-状态：进行中（Command Queue 最小闭环已完成）
+状态：已完成
 
 ### 目标
 
@@ -146,6 +155,9 @@ python syntax ok  passed
   - `profile.delete`
 - Web Agents 列表恢复 New Agent / Rename / Delete，但改为创建 command。（已完成）
 - 删除操作保留二次确认，并只允许 `type=profile` 的 Agent。（已完成）
+- Agent 写操作串行化：同一 agent 同时只允许一个写命令运行。（已完成）
+- 命令超时处理：server 心跳检测 + Hub Agent subprocess timeout，默认 300s。（已完成）
+- Web 命令结果轮询：操作后等待命令完成，失败时展示 stderr。（已完成）
 
 ### 交付物
 
@@ -156,11 +168,12 @@ python syntax ok  passed
 
 ### 验收标准
 
-- 创建 Agent 后，Command 状态从 `pending` 变为 `success` 或 `failed`。
-- Rename 失败时能展示 Hermes CLI 的明确错误。
-- Delete 不再由 Server 直接删除文件或同步执行。
-- Hub Agent 只执行白名单 command type。
-- 一个 Agent 同时只执行一个写操作。
+- 创建 Agent 后，Command 状态从 `pending` 变为 `success` 或 `failed`。 ✅
+- Rename 失败时能展示 Hermes CLI 的明确错误。 ✅
+- Delete 不再由 Server 直接删除文件或同步执行。 ✅
+- Hub Agent 只执行白名单 command type。 ✅
+- 一个 Agent 同时只执行一个写操作。 ✅
+- 命令超时自动标记为 timeout。 ✅
 
 ### 风险
 
@@ -171,10 +184,18 @@ python syntax ok  passed
 ### 当前验证
 
 ```text
-profile.scan command lifecycle: pending -> dispatched -> running -> success
-/api/commands/:id returned success
-/api/nodes returned 1 node
-/api/agents returned 3 agents
+profile.scan command lifecycle           pending -> dispatched -> running -> success
+profile.create command lifecycle         pending -> dispatched -> running -> success
+profile.rename success + rescan          通过，列表展示新名称
+profile.rename failure + stderr display  通过，Web 展示 Hermes CLI 错误
+profile.delete + double confirm          通过，二次确认 + type=profile 保护
+agent write serialization               同一 agent 不会同时运行两个写命令
+command timeout detection               running 命令超时自动标记 timeout
+/api/commands/:id returned              success / failed / timeout 终态
+/api/nodes returned                     1 node
+/api/agents returned                    3 agents
+pnpm run build                          passed
+python syntax ok                        passed
 ```
 
 ---
@@ -557,18 +578,13 @@ Phase 2 和 Phase 3 是后续所有功能的基础，不建议跳过。
 
 ## 13. 下一步建议
 
-下一步优先进入 Phase 2，先实现最小 Command Queue。
+Phase 1-2 已完成，下一步进入 Phase 3：持久化与 Registry 稳定化。
 
-建议第一批任务：
+推荐第一批任务：
 
-- 定义 Command 协议类型。
-- Hub Server 新增 `/api/commands`。
-- Hub Agent 新增 poll/result loop。
-- Web 提交 rename command。
-- Rename 成功后触发 profile rescan。
-
-选择 rename 作为第一条 command 的原因：
-
-- 操作足够真实。
-- 风险比 delete 低。
-- 能验证 command 创建、poll、执行、结果回传、状态刷新完整链路。
+- 引入 SQLite（零配置、单文件、适合开发期）。
+- 建立 `nodes`、`agents`、`commands` 表。
+- Hub Server 从内存 Map 迁移到 SQLite 读写。
+- Heartbeat 更新时同步写入数据库。
+- Server 重启后 Node/Agent/Command 数据不丢失。
+- 添加基础 migration 机制（后续可接 drizzle 或 knex）。
