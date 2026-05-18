@@ -22,6 +22,7 @@ const tabs = [
   { key: 'config', label: 'config.yaml' },
   { key: 'soul', label: 'SOUL.md' },
   { key: 'skills', label: 'Skills' },
+  { key: 'env', label: 'Env' },
 ] as const
 
 type TabKey = (typeof tabs)[number]['key']
@@ -46,6 +47,16 @@ const soulDraft = ref('')
 const soulSaving = ref(false)
 const soulSaveState = ref<SaveState>('idle')
 const soulSaveError = ref<string | null>(null)
+
+// Env state (Phase 6)
+const envKeys = ref<string[]>([])
+const envLoading = ref(false)
+const envLoadError = ref<string | null>(null)
+const envSaving = ref(false)
+const envSetShow = ref(false)
+const envSetKey = ref('')
+const envSetValue = ref('')
+const envError = ref<string | null>(null)
 
 const profileId = computed(() => String(route.params.id ?? ''))
 const profile = computed(() => profiles.value.find((item) => item.id === profileId.value) ?? null)
@@ -152,6 +163,46 @@ function resetSoul(): void {
   clearSoulFeedback()
 }
 
+function openEnvSet(newKey = '', newValue = ''): void {
+  envSetKey.value = newKey
+  envSetValue.value = newValue
+  envSetShow.value = true
+  envError.value = null
+}
+
+async function saveEnv(): Promise<void> {
+  if (!envSetKey.value.trim()) return
+  envSaving.value = true
+  envError.value = null
+  try {
+    const result = await hubStore.setEnv(profileId.value, envSetKey.value.trim(), envSetValue.value)
+    if (result.ok) {
+      envSetShow.value = false
+      envKeys.value = await hubStore.fetchEnvStatus(profileId.value)
+    } else {
+      envError.value = result.error ?? 'env.set failed'
+    }
+  } finally {
+    envSaving.value = false
+  }
+}
+
+async function doDeleteEnv(key: string): Promise<void> {
+  if (!window.confirm(`Delete env variable '${key}'?`)) return
+  envSaving.value = true
+  envError.value = null
+  try {
+    const result = await hubStore.deleteEnv(profileId.value, key)
+    if (result.ok) {
+      envKeys.value = await hubStore.fetchEnvStatus(profileId.value)
+    } else {
+      envError.value = result.error ?? 'env.delete failed'
+    }
+  } finally {
+    envSaving.value = false
+  }
+}
+
 async function loadProfileDetail(): Promise<void> {
   loading.value = true
   loadError.value = null
@@ -179,6 +230,18 @@ async function loadProfileDetail(): Promise<void> {
     soulLoadedText.value = soulText
     soulDraft.value = soulText
     skills.value = profileSkills
+
+    // Env 加载独立进行，不阻塞主流程
+    envLoading.value = true
+    envLoadError.value = null
+    try {
+      envKeys.value = await hubStore.fetchEnvStatus(profileId.value)
+    } catch {
+      envLoadError.value = 'Failed to load env status'
+      envKeys.value = []
+    } finally {
+      envLoading.value = false
+    }
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : 'Failed to load agent details'
     configLoadedText.value = ''
@@ -373,6 +436,49 @@ watch(soulDraft, () => {
             <span v-if="isSoulDirty" class="text-xs text-warning">Unsaved changes</span>
             <span v-if="soulSaveState === 'saved'" class="text-xs text-mint">Saved</span>
             <span v-if="soulSaveState === 'error'" class="text-xs text-danger">Save failed: {{ soulSaveError }}</span>
+          </div>
+        </div>
+
+        <div v-else-if="activeTab === 'env'" class="space-y-4">
+          <div class="flex flex-wrap items-center gap-2 rounded-md border border-snow/10 bg-snow/[.03] p-2">
+            <UiButton variant="green" @click="openEnvSet()">Add Env</UiButton>
+            <span v-if="envLoading" class="text-xs text-slate">Loading env...</span>
+            <span v-else-if="envLoadError" class="text-xs text-danger">{{ envLoadError }}</span>
+          </div>
+
+          <div v-if="envError" class="rounded-md border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-danger">{{ envError }}</div>
+
+          <!-- Set env modal -->
+          <div v-if="envSetShow" class="rounded-md border border-signal/25 bg-signal/5 p-4 space-y-3">
+            <h4 class="text-sm font-extrabold text-snow">Set Env Variable</h4>
+            <label class="form-group">
+              <span>Key</span>
+              <input v-model="envSetKey" placeholder="API_KEY" />
+            </label>
+            <label class="form-group">
+              <span>Value</span>
+              <input v-model="envSetValue" placeholder="" />
+            </label>
+            <div class="flex gap-2">
+              <UiButton variant="primary" :disabled="envSaving || !envSetKey.trim()" @click="saveEnv">
+                {{ envSaving ? 'Saving...' : 'Save' }}
+              </UiButton>
+              <UiButton :disabled="envSaving" @click="envSetShow = false">Cancel</UiButton>
+            </div>
+          </div>
+
+          <div v-if="envKeys.length === 0 && !envLoading" class="rounded-md border border-snow/10 bg-snow/[.03] p-4 text-sm text-slate">
+            No environment variables configured.
+          </div>
+          <div v-for="key in envKeys" :key="key" class="flex items-center justify-between rounded-md border border-snow/10 bg-snow/[.03] px-4 py-3">
+            <div class="flex items-center gap-3">
+              <StatusBadge tone="info">set</StatusBadge>
+              <span class="text-sm font-extrabold text-snow">{{ key }}</span>
+            </div>
+            <div class="flex gap-2">
+              <UiButton @click="openEnvSet(key)">Edit</UiButton>
+              <UiButton variant="red" :disabled="envSaving" @click="doDeleteEnv(key)">Delete</UiButton>
+            </div>
           </div>
         </div>
 

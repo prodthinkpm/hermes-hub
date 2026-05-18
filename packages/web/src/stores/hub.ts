@@ -159,6 +159,37 @@ export const useHubStore = defineStore('hub', () => {
     return result.data
   }
 
+  // Env 管理（Phase 6）
+  async function fetchEnvStatus(id: string): Promise<string[]> {
+    const result = await api.getEnvStatus(id)
+    if (!result.ok || !result.data) return []
+    return result.data
+  }
+
+  async function setEnv(id: string, key: string, value: string): Promise<{ ok: boolean; error?: string }> {
+    const result = await api.setEnv(id, key, value)
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue env.set' }
+    const final = await api.waitForCommand(result.data.id)
+    if (final.ok && final.data) {
+      if (final.data.status === 'failed') return { ok: false, error: final.data.stderr || final.data.error || 'env.set failed' }
+      if (final.data.status === 'timeout') return { ok: false, error: final.data.error || 'env.set timed out' }
+    }
+    await fetchProfiles()
+    return { ok: true }
+  }
+
+  async function deleteEnv(id: string, key: string): Promise<{ ok: boolean; error?: string }> {
+    const result = await api.deleteEnv(id, key)
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue env.delete' }
+    const final = await api.waitForCommand(result.data.id)
+    if (final.ok && final.data) {
+      if (final.data.status === 'failed') return { ok: false, error: final.data.stderr || final.data.error || 'env.delete failed' }
+      if (final.data.status === 'timeout') return { ok: false, error: final.data.error || 'env.delete timed out' }
+    }
+    await fetchProfiles()
+    return { ok: true }
+  }
+
   async function fetchLogs(): Promise<void> {
     isLoadingLogs.value = true
     logsError.value = null
@@ -314,6 +345,10 @@ export const useHubStore = defineStore('hub', () => {
     restartGateway,
     batchStartGateways,
     batchStopGateways,
+    // Env
+    fetchEnvStatus,
+    setEnv,
+    deleteEnv,
     // Setup / Doctor
     runSetup,
     runDoctor,

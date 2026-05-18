@@ -8,6 +8,10 @@ export type CommandType =
   | 'gateway.start' | 'gateway.stop' | 'gateway.restart'
   | 'doctor.run' | 'setup.run'
   | 'logs.tail'
+  | 'config.read' | 'config.patch'
+  | 'soul.read' | 'soul.update'
+  | 'env.status' | 'env.set' | 'env.delete'
+  | 'skills.list'
 
 export interface HubNode {
   id: string

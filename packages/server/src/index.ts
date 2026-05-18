@@ -125,7 +125,11 @@ function isCommandType(value: unknown): value is CommandType {
     value === 'profile.scan' || value === 'profile.create' || value === 'profile.rename' || value === 'profile.delete' ||
     value === 'gateway.start' || value === 'gateway.stop' || value === 'gateway.restart' ||
     value === 'doctor.run' || value === 'setup.run' ||
-    value === 'logs.tail'
+    value === 'logs.tail' ||
+    value === 'config.read' || value === 'config.patch' ||
+    value === 'soul.read' || value === 'soul.update' ||
+    value === 'env.status' || value === 'env.set' || value === 'env.delete' ||
+    value === 'skills.list'
   )
 }
 
@@ -242,6 +246,22 @@ function auditCommand(db: Database.Database, command: HubCommand): void {
     case 'doctor.run':
       insertLog(db, 'info', `Doctor ran for '${agentName}'`, source)
       break
+    case 'config.patch':
+      insertLog(db, 'warn', `Config updated for '${agentName}'`, source)
+      break
+    case 'soul.update':
+      insertLog(db, 'warn', `SOUL updated for '${agentName}'`, source)
+      break
+    case 'env.set': {
+      const envKey = typeof command.payload?.key === 'string' ? command.payload.key : '?'
+      insertLog(db, 'warn', `Env '${envKey}' set for '${agentName}'`, source)
+      break
+    }
+    case 'env.delete': {
+      const envDelKey = typeof command.payload?.key === 'string' ? command.payload.key : '?'
+      insertLog(db, 'warn', `Env '${envDelKey}' deleted for '${agentName}'`, source)
+      break
+    }
   }
 }
 
@@ -748,6 +768,98 @@ async function handlePublicApi(
   if (doctorMatch) {
     if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
     const result = createCommand(db, { agentId: decodeURIComponent(doctorMatch[1]), type: 'doctor.run', payload: {} })
+    if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
+    jsonReply(res, 202, { ok: true, data: result.command })
+    return true
+  }
+
+  // Config read/write routes (Phase 6)
+  const configReadMatch = path.match(/^\/api\/profiles\/([^/]+)\/config\/read$/)
+  if (configReadMatch) {
+    if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    const result = createCommand(db, { agentId: decodeURIComponent(configReadMatch[1]), type: 'config.read', payload: {} })
+    if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
+    jsonReply(res, 202, { ok: true, data: result.command })
+    return true
+  }
+
+  const configWriteMatch = path.match(/^\/api\/profiles\/([^/]+)\/config\.yaml$/)
+  if (configWriteMatch) {
+    if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    let body: unknown
+    try { body = await readJsonBody(req) } catch { jsonReply(res, 400, { ok: false, error: 'Invalid JSON' }); return true }
+    const content = isObject(body) && typeof body.content === 'string' ? body.content : ''
+    const result = createCommand(db, { agentId: decodeURIComponent(configWriteMatch[1]), type: 'config.patch', payload: { content } })
+    if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
+    jsonReply(res, 202, { ok: true, data: result.command })
+    return true
+  }
+
+  // SOUL read/write routes (Phase 6)
+  const soulReadMatch = path.match(/^\/api\/profiles\/([^/]+)\/soul\/read$/)
+  if (soulReadMatch) {
+    if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    const result = createCommand(db, { agentId: decodeURIComponent(soulReadMatch[1]), type: 'soul.read', payload: {} })
+    if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
+    jsonReply(res, 202, { ok: true, data: result.command })
+    return true
+  }
+
+  const soulWriteMatch = path.match(/^\/api\/profiles\/([^/]+)\/SOUL\.md$/)
+  if (soulWriteMatch) {
+    if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    let body: unknown
+    try { body = await readJsonBody(req) } catch { jsonReply(res, 400, { ok: false, error: 'Invalid JSON' }); return true }
+    const content = isObject(body) && typeof body.content === 'string' ? body.content : ''
+    const result = createCommand(db, { agentId: decodeURIComponent(soulWriteMatch[1]), type: 'soul.update', payload: { content } })
+    if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
+    jsonReply(res, 202, { ok: true, data: result.command })
+    return true
+  }
+
+  // Skills read route (Phase 6)
+  const skillsReadMatch = path.match(/^\/api\/profiles\/([^/]+)\/skills\/read$/)
+  if (skillsReadMatch) {
+    if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    const result = createCommand(db, { agentId: decodeURIComponent(skillsReadMatch[1]), type: 'skills.list', payload: {} })
+    if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
+    jsonReply(res, 202, { ok: true, data: result.command })
+    return true
+  }
+
+  // Env routes (Phase 6)
+  const envReadMatch = path.match(/^\/api\/profiles\/([^/]+)\/env\/read$/)
+  if (envReadMatch) {
+    if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    const result = createCommand(db, { agentId: decodeURIComponent(envReadMatch[1]), type: 'env.status', payload: {} })
+    if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
+    jsonReply(res, 202, { ok: true, data: result.command })
+    return true
+  }
+
+  const envSetMatch = path.match(/^\/api\/profiles\/([^/]+)\/env$/)
+  if (envSetMatch) {
+    if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    let body: unknown
+    try { body = await readJsonBody(req) } catch { jsonReply(res, 400, { ok: false, error: 'Invalid JSON' }); return true }
+    if (!isObject(body) || typeof body.key !== 'string' || typeof body.value !== 'string') {
+      jsonReply(res, 400, { ok: false, error: 'env set requires key and value' }); return true
+    }
+    const result = createCommand(db, { agentId: decodeURIComponent(envSetMatch[1]), type: 'env.set', payload: { key: body.key, value: body.value } })
+    if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
+    jsonReply(res, 202, { ok: true, data: result.command })
+    return true
+  }
+
+  const envDeleteMatch = path.match(/^\/api\/profiles\/([^/]+)\/env\/delete$/)
+  if (envDeleteMatch) {
+    if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    let body: unknown
+    try { body = await readJsonBody(req) } catch { jsonReply(res, 400, { ok: false, error: 'Invalid JSON' }); return true }
+    if (!isObject(body) || typeof body.key !== 'string') {
+      jsonReply(res, 400, { ok: false, error: 'env delete requires key' }); return true
+    }
+    const result = createCommand(db, { agentId: decodeURIComponent(envDeleteMatch[1]), type: 'env.delete', payload: { key: body.key } })
     if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
     jsonReply(res, 202, { ok: true, data: result.command })
     return true

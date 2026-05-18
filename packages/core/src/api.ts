@@ -237,24 +237,78 @@ export class HermesApiClient {
     return { ok: false, error: lastError ?? `Command '${id}' did not complete within ${maxWaitMs / 1000}s` }
   }
 
+  // Config — 通过 command queue 异步读取（Phase 6）
   async getProfileConfig(id: string): Promise<HermesApiResponse<string>> {
-    return this.getText(`/api/profiles/${encodeURIComponent(id)}/config.yaml`)
+    const result = await this.post<HubCommand>(`/api/profiles/${encodeURIComponent(id)}/config/read`, {})
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue config.read' }
+    const final = await this.waitForCommand(result.data.id)
+    if (!final.ok || !final.data) return { ok: false, error: final.error ?? 'Command failed' }
+    if (final.data.status === 'failed') return { ok: false, error: final.data.stderr || 'config.read failed' }
+    return { ok: true, data: final.data.stdout ?? '' }
   }
 
   async updateProfileConfig(id: string, content: string): Promise<HermesApiResponse<null>> {
-    return this.put<null>(`/api/profiles/${encodeURIComponent(id)}/config.yaml`, { content })
+    const result = await this.post<HubCommand>(`/api/profiles/${encodeURIComponent(id)}/config.yaml`, { content })
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue config.patch' }
+    const final = await this.waitForCommand(result.data.id)
+    if (!final.ok || !final.data) return { ok: false, error: final.error ?? 'Command failed' }
+    if (final.data.status === 'failed') return { ok: false, error: final.data.stderr || 'config.patch failed' }
+    return { ok: true, data: null }
   }
 
+  // SOUL — 通过 command queue 异步读取（Phase 6）
   async getProfileSoul(id: string): Promise<HermesApiResponse<string>> {
-    return this.getText(`/api/profiles/${encodeURIComponent(id)}/SOUL.md`)
+    const result = await this.post<HubCommand>(`/api/profiles/${encodeURIComponent(id)}/soul/read`, {})
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue soul.read' }
+    const final = await this.waitForCommand(result.data.id)
+    if (!final.ok || !final.data) return { ok: false, error: final.error ?? 'Command failed' }
+    if (final.data.status === 'failed') return { ok: false, error: final.data.stderr || 'soul.read failed' }
+    return { ok: true, data: final.data.stdout ?? '' }
   }
 
   async updateProfileSoul(id: string, content: string): Promise<HermesApiResponse<null>> {
-    return this.put<null>(`/api/profiles/${encodeURIComponent(id)}/SOUL.md`, { content })
+    const result = await this.post<HubCommand>(`/api/profiles/${encodeURIComponent(id)}/SOUL.md`, { content })
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue soul.update' }
+    const final = await this.waitForCommand(result.data.id)
+    if (!final.ok || !final.data) return { ok: false, error: final.error ?? 'Command failed' }
+    if (final.data.status === 'failed') return { ok: false, error: final.data.stderr || 'soul.update failed' }
+    return { ok: true, data: null }
   }
 
+  // Skills — 通过 command queue 异步读取（Phase 6）
   async getProfileSkills(id: string): Promise<HermesApiResponse<string[]>> {
-    return this.get<string[]>(`/api/profiles/${encodeURIComponent(id)}/skills`)
+    const result = await this.post<HubCommand>(`/api/profiles/${encodeURIComponent(id)}/skills/read`, {})
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue skills.list' }
+    const final = await this.waitForCommand(result.data.id)
+    if (!final.ok || !final.data) return { ok: false, error: final.error ?? 'Command failed' }
+    if (final.data.status === 'failed') return { ok: false, error: final.data.stderr || 'skills.list failed' }
+    try {
+      return { ok: true, data: final.data.stdout ? JSON.parse(final.data.stdout) : [] }
+    } catch {
+      return { ok: true, data: [] }
+    }
+  }
+
+  // Env — 通过 command queue（Phase 6）
+  async getEnvStatus(id: string): Promise<HermesApiResponse<string[]>> {
+    const result = await this.post<HubCommand>(`/api/profiles/${encodeURIComponent(id)}/env/read`, {})
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue env.status' }
+    const final = await this.waitForCommand(result.data.id)
+    if (!final.ok || !final.data) return { ok: false, error: final.error ?? 'Command failed' }
+    if (final.data.status === 'failed') return { ok: false, error: final.data.stderr || 'env.status failed' }
+    try { return { ok: true, data: final.data.stdout ? JSON.parse(final.data.stdout) : [] } } catch { return { ok: true, data: [] } }
+  }
+
+  async setEnv(id: string, key: string, value: string): Promise<HermesApiResponse<HubCommand>> {
+    const result = await this.post<HubCommand>(`/api/profiles/${encodeURIComponent(id)}/env`, { key, value })
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue env.set' }
+    return { ok: true, data: result.data }
+  }
+
+  async deleteEnv(id: string, key: string): Promise<HermesApiResponse<HubCommand>> {
+    const result = await this.post<HubCommand>(`/api/profiles/${encodeURIComponent(id)}/env/delete`, { key })
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue env.delete' }
+    return { ok: true, data: result.data }
   }
 
   async getConfig(): Promise<HermesApiResponse<HubConfig>> {

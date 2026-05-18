@@ -363,6 +363,147 @@ def execute_command(command: dict[str, Any], hermes_home: Path) -> dict[str, Any
             content = "(no log file)"
         return {"ok": True, "stdout": truncate_output(content), "stderr": ""}
 
+    # Config 读写（Phase 6）
+    if command_type == "config.read":
+        config_path = target_home / "config.yaml"
+        if config_path.exists():
+            try:
+                content = config_path.read_text(encoding="utf-8", errors="replace")
+            except OSError as e:
+                return {"ok": False, "stdout": "", "stderr": f"Failed to read config.yaml: {e}"}
+            return {"ok": True, "stdout": truncate_output(content), "stderr": ""}
+        return {"ok": False, "stdout": "", "stderr": "config.yaml not found"}
+
+    if command_type == "config.patch":
+        content = payload.get("content", "")
+        if not isinstance(content, str):
+            return {"ok": False, "stdout": "", "stderr": "content is required"}
+        config_path = target_home / "config.yaml"
+        # 写入前备份
+        if config_path.exists():
+            try:
+                import shutil
+                shutil.copy2(config_path, config_path.with_suffix(".yaml.bak"))
+            except OSError as e:
+                return {"ok": False, "stdout": "", "stderr": f"Failed to backup config.yaml: {e}"}
+        try:
+            config_path.write_text(content, encoding="utf-8")
+        except OSError as e:
+            return {"ok": False, "stdout": "", "stderr": f"Failed to write config.yaml: {e}"}
+        return {"ok": True, "stdout": "config.yaml updated", "stderr": ""}
+
+    # SOUL 读写（Phase 6）
+    if command_type == "soul.read":
+        soul_path = target_home / "SOUL.md"
+        if soul_path.exists():
+            try:
+                content = soul_path.read_text(encoding="utf-8", errors="replace")
+            except OSError as e:
+                return {"ok": False, "stdout": "", "stderr": f"Failed to read SOUL.md: {e}"}
+            return {"ok": True, "stdout": truncate_output(content), "stderr": ""}
+        return {"ok": True, "stdout": "", "stderr": ""}
+
+    if command_type == "soul.update":
+        content = payload.get("content", "")
+        if not isinstance(content, str):
+            return {"ok": False, "stdout": "", "stderr": "content is required"}
+        soul_path = target_home / "SOUL.md"
+        if soul_path.exists():
+            try:
+                import shutil
+                shutil.copy2(soul_path, soul_path.with_suffix(".md.bak"))
+            except OSError as e:
+                return {"ok": False, "stdout": "", "stderr": f"Failed to backup SOUL.md: {e}"}
+        try:
+            soul_path.write_text(content, encoding="utf-8")
+        except OSError as e:
+            return {"ok": False, "stdout": "", "stderr": f"Failed to write SOUL.md: {e}"}
+        return {"ok": True, "stdout": "SOUL.md updated", "stderr": ""}
+
+    # Skills 列表（Phase 6）
+    if command_type == "skills.list":
+        skills_dir = target_home / "skills"
+        if skills_dir.is_dir():
+            try:
+                names = [p.stem for p in skills_dir.glob("*.md") if p.is_file()]
+            except OSError:
+                names = []
+        else:
+            names = []
+        return {"ok": True, "stdout": json.dumps(names), "stderr": ""}
+
+    # Env 管理（Phase 6）—— 只返回 key，不返回 value
+    if command_type == "env.status":
+        env_path = target_home / ".env"
+        keys: list[str] = []
+        if env_path.exists():
+            try:
+                for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        keys.append(line.split("=", 1)[0].strip())
+            except OSError:
+                pass
+        return {"ok": True, "stdout": json.dumps(keys), "stderr": ""}
+
+    if command_type == "env.set":
+        key = payload.get("key")
+        value = payload.get("value")
+        if not isinstance(key, str) or not key.strip():
+            return {"ok": False, "stdout": "", "stderr": "key is required"}
+        if not isinstance(value, str):
+            return {"ok": False, "stdout": "", "stderr": "value is required"}
+        env_path = target_home / ".env"
+        env_lines: list[str] = []
+        found = False
+        if env_path.exists():
+            try:
+                env_lines = env_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError as e:
+                return {"ok": False, "stdout": "", "stderr": f"Failed to read .env: {e}"}
+        out_lines: list[str] = []
+        for line in env_lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                line_key = stripped.split("=", 1)[0].strip()
+                if line_key == key:
+                    out_lines.append(f"{key}={value}")
+                    found = True
+                    continue
+            out_lines.append(line)
+        if not found:
+            out_lines.append(f"{key}={value}")
+        try:
+            env_path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+        except OSError as e:
+            return {"ok": False, "stdout": "", "stderr": f"Failed to write .env: {e}"}
+        return {"ok": True, "stdout": f"env {key} set", "stderr": ""}
+
+    if command_type == "env.delete":
+        key = payload.get("key")
+        if not isinstance(key, str) or not key.strip():
+            return {"ok": False, "stdout": "", "stderr": "key is required"}
+        env_path = target_home / ".env"
+        if not env_path.exists():
+            return {"ok": True, "stdout": ".env not found, nothing to delete", "stderr": ""}
+        try:
+            env_lines = env_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError as e:
+            return {"ok": False, "stdout": "", "stderr": f"Failed to read .env: {e}"}
+        out_lines: list[str] = []
+        for line in env_lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                line_key = stripped.split("=", 1)[0].strip()
+                if line_key == key:
+                    continue
+            out_lines.append(line)
+        try:
+            env_path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+        except OSError as e:
+            return {"ok": False, "stdout": "", "stderr": f"Failed to write .env: {e}"}
+        return {"ok": True, "stdout": f"env {key} deleted", "stderr": ""}
+
     return {"ok": False, "stdout": "", "stderr": f"Unsupported command type: {command_type}"}
 
 
