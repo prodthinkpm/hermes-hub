@@ -27,26 +27,26 @@ export interface RenameProfileResult {
 }
 
 export class HermesApiClient {
+  private static _authToken: string | null = null
+
   constructor(private baseUrl: string = '') {}
 
-  private authToken: string | null = null
-
   setAuthToken(token: string | null): void {
-    this.authToken = token
+    HermesApiClient._authToken = token
   }
 
   clearAuthToken(): void {
-    this.authToken = null
+    HermesApiClient._authToken = null
   }
 
   getAuthToken(): string | null {
-    return this.authToken
+    return HermesApiClient._authToken
   }
 
   private authHeaders(): Record<string, string> {
     const headers: Record<string, string> = {}
-    if (this.authToken) {
-      headers['Authorization'] = `Bearer ${this.authToken}`
+    if (HermesApiClient._authToken) {
+      headers['Authorization'] = `Bearer ${HermesApiClient._authToken}`
     }
     return headers
   }
