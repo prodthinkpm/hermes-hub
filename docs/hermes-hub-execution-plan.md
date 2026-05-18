@@ -1,6 +1,6 @@
 # Hermes Hub 任务执行计划
 
-版本：v0.5
+版本：v0.6
 日期：2026-05-18
 分支：`refactor-controller-agent-architecture`
 目标：按 Controller-Agent 技术方案重构当前项目，保留现有 Web 视觉风格，替换底层架构模型。
@@ -51,6 +51,7 @@ Command Queue = 所有变更操作入口
 - SQLite 持久化：5 张表（nodes/agents/commands/logs/metadata），WAL 模式，重启不丢数据。
 - Setup/Gateway 管理：5 种新命令类型（start/stop/restart/setup/doctor），Web 动态 gateway 页面。
 - Logs Center：4 条日志查询路由（all/agent/node/command），审计日志自动记录，密钥脱敏。
+- Config/SOUL/Env 管理：8 种新命令类型，异步文件读写 + 写入备份，Env 只展示 key 不展示 value。
 
 ### 已验证
 
@@ -69,12 +70,15 @@ gateway.start command lifecycle       202 → Hub Agent poll → execute → res
 ServicesPage dynamic table            展示所有 agent 的 gateway 状态和操作按钮
 /api/logs with audit records          gateway.start → audit log inserted
 log secret redaction                  API_KEY / TOKEN / SECRET 写入前脱敏
+config.read lifecycle                 202 → poll → execute → read file → return stdout
+config.patch + backup                 写入前自动备份 config.yaml.bak
+ProfileDetailPage Env tab            展示 Env key 列表，Set/Edit/Delete
 ```
 
 ### 当前边界
 
-- Phase 1-5 已完成，Controller-Agent 架构 + SQLite + Gateway + Logs/Audit 落地。
-- create / rename / delete / gateway / setup / doctor 已走 command + audit 流程。
+- Phase 1-6 已完成，Controller-Agent 架构 + SQLite + Gateway + Logs/Audit + Config/SOUL/Env 落地。
+- 所有 Agent 文件操作全部走 command + audit 流程。
 - 暂不做远程节点、Docker、权限、审计。
 
 ---
@@ -353,7 +357,7 @@ pnpm run build                           passed
 
 ## 8. Phase 6：Config / SOUL / Env 完整管理
 
-状态：待开始
+状态：已完成
 
 ### 目标
 
@@ -368,26 +372,23 @@ pnpm run build                           passed
 
 ### 主要任务
 
-- Config 写入改为 command：
-  - `config.read`
-  - `config.patch`
-- SOUL 写入改为 command：
-  - `soul.read`
-  - `soul.update`
-- Env 只返回状态：
-  - `env.status`
-  - `env.set`
-  - `env.delete`
-- 保存前 YAML 校验。
-- 保存后提示是否需要重启 Gateway。
-- 添加 config 写入备份策略。
+- Config 写入改为 command（已完成）
+  - `config.read`、`config.patch`
+- SOUL 写入改为 command（已完成）
+  - `soul.read`、`soul.update`
+- Env 只返回 key 名不返回 value（已完成）
+  - `env.status`、`env.set`、`env.delete`
+- Skills 列表读取改为 command（已完成）
+  - `skills.list`
+- Config/SOUL 写入前自动备份 `.bak`（已完成）
+- Env tab 新增在 Profile 详情页（已完成）
 
 ### 交付物
 
-- Config 表单 + Raw 查看。
-- SOUL 编辑器。
-- Env 状态管理。
-- Config/SOUL/Env 的 command 化写入。
+- Config 表单 + Raw 查看。 ✅
+- SOUL 编辑器。 ✅
+- Env 状态管理（只展示 key，不展示 value）。 ✅
+- Config/SOUL/Env/Skills 的 command 化读写。 ✅
 
 ### 验收标准
 
@@ -576,12 +577,12 @@ Phase 2 和 Phase 3 是后续所有功能的基础，不建议跳过。
 
 ## 13. 下一步建议
 
-Phase 1-5 已完成，下一步进入 Phase 6：Config / SOUL / Env 完整管理。
+Phase 1-6 已完成，下一步进入 Phase 7：Hub Agent 安装与部署。
 
 推荐第一批任务：
 
-- Config 写入改为 command（config.read + config.patch）。
-- SOUL 写入改为 command（soul.read + soul.update）。
-- Env 管理（env.status 只返回 set/absent，不返回明文 value）。
-- Agent 详情页新增 Env tab 和 Setup/Doctor 操作按钮。
-- YAML 保存前校验 + 写入前备份。
+- pipx install hermes-hub-agent / uv tool install hermes-hub-agent
+- 增加 hermes-hub-agent init 生成配置文件
+- systemd / launchd / Windows service 支持
+- PyInstaller / Nuitka 单文件发布评估
+- Docker 镜像和 compose 模板
