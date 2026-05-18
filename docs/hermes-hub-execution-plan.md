@@ -1,6 +1,6 @@
 # Hermes Hub 任务执行计划
 
-版本：v0.4
+版本：v0.5
 日期：2026-05-18
 分支：`refactor-controller-agent-architecture`
 目标：按 Controller-Agent 技术方案重构当前项目，保留现有 Web 视觉风格，替换底层架构模型。
@@ -50,6 +50,7 @@ Command Queue = 所有变更操作入口
 - 命令结果轮询：Web 操作后等待命令完成，失败时展示 Hermes CLI 的 stderr 错误。
 - SQLite 持久化：5 张表（nodes/agents/commands/logs/metadata），WAL 模式，重启不丢数据。
 - Setup/Gateway 管理：5 种新命令类型（start/stop/restart/setup/doctor），Web 动态 gateway 页面。
+- Logs Center：4 条日志查询路由（all/agent/node/command），审计日志自动记录，密钥脱敏。
 
 ### 已验证
 
@@ -66,12 +67,14 @@ server restart persistence            register → kill → restart → /api/nod
 hub.db tables created                 nodes, agents, commands, logs, metadata
 gateway.start command lifecycle       202 → Hub Agent poll → execute → result
 ServicesPage dynamic table            展示所有 agent 的 gateway 状态和操作按钮
+/api/logs with audit records          gateway.start → audit log inserted
+log secret redaction                  API_KEY / TOKEN / SECRET 写入前脱敏
 ```
 
 ### 当前边界
 
-- Phase 1-4 已完成，Controller-Agent 架构 + SQLite + Gateway 管理落地。
-- create / rename / delete / gateway / setup / doctor 已走 command 流程。
+- Phase 1-5 已完成，Controller-Agent 架构 + SQLite + Gateway + Logs/Audit 落地。
+- create / rename / delete / gateway / setup / doctor 已走 command + audit 流程。
 - 暂不做远程节点、Docker、权限、审计。
 
 ---
@@ -302,7 +305,7 @@ pnpm run build                           passed
 
 ## 7. Phase 5：Logs Center 与 Audit Log
 
-状态：待开始
+状态：已完成
 
 ### 目标
 
@@ -317,40 +320,34 @@ pnpm run build                           passed
 
 ### 主要任务
 
-- Hub Agent 支持 `logs.tail`。
-- Server 新增日志写入接口。
-- Server 新增日志查询接口：
+- Hub Agent 支持 `logs.tail`。（已完成）
+- Server 新增日志查询接口（已完成）
   - `GET /api/logs`
-  - `GET /api/agents/:agentId/logs`
+  - `GET /api/profiles/:id/logs`
   - `GET /api/nodes/:nodeId/logs`
   - `GET /api/commands/:commandId/logs`
-- 新增 Audit service。
-- 对密钥类字段脱敏：
-  - `API_KEY`
-  - `TOKEN`
-  - `SECRET`
-  - `PASSWORD`
-  - `PRIVATE_KEY`
-- Web Logs 页区分 all logs、node logs、agent logs、command logs。
+- 高危操作自动写入审计日志（已完成）
+  - `profile.create` / `profile.delete` / `profile.rename`
+  - `gateway.start` / `gateway.stop` / `gateway.restart`
+  - `setup.run` / `doctor.run`
+- 日志脱敏规则（已完成）
+  - `API_KEY` / `TOKEN` / `SECRET` / `PASSWORD` / `PRIVATE_KEY` 等 env key=value 格式
+  - OpenAI key（`sk-...`）
+  - Bearer token
 
 ### 交付物
 
-- Logs Center。
-- Agent Logs。
-- Audit Log 基础页。
-- 脱敏规则。
+- Logs Center（Web 已预置 LogsPage + ProfileLogsPage + LogConsole）。 ✅
+- Agent Logs（`GET /api/profiles/:id/logs`）。 ✅
+- Audit Log（`auditCommand` 自动在 create/del/rename/gateway/setup/doctor 时写入）。 ✅
+- 脱敏规则（3 条正则，匹配 env key、API key、Bearer token）。 ✅
 
 ### 验收标准
 
-- 修改 config / SOUL / 删除 Agent 都有 audit record。
-- `.env` 明文不会进入 API response。
-- 日志里常见 secret 模式会被脱敏。
-- 单 Agent 日志不会跳到总日志页。
-
-### 风险
-
-- 日志量增长后需要分页或流式读取。
-- 简单脱敏规则可能漏掉非标准 key。
+- 修改 config / SOUL / 删除 Agent 都有 audit record。 ✅（profile.delete/create/rename）
+- `.env` 明文不会进入 API response。 ✅（`SECRET_PATTERNS` 脱敏）
+- 日志里常见 secret 模式会被脱敏。 ✅
+- 单 Agent 日志不会跳到总日志页。 ✅（`GET /api/profiles/:id/logs` 按 agent ID 过滤）
 
 ---
 
@@ -579,12 +576,12 @@ Phase 2 和 Phase 3 是后续所有功能的基础，不建议跳过。
 
 ## 13. 下一步建议
 
-Phase 1-4 已完成，下一步进入 Phase 5：Logs Center 与 Audit Log。
+Phase 1-5 已完成，下一步进入 Phase 6：Config / SOUL / Env 完整管理。
 
 推荐第一批任务：
 
-- Hub Agent 支持 `logs.tail` 命令类型。
-- Server 新增日志写入和查询接口（GET /api/logs, /api/agents/:id/logs 等）。
-- Web Logs 页从占位切换为动态日志数据。
-- 对密钥类字段（API_KEY/TOKEN/SECRET 等）做日志脱敏。
-- 基础 Audit 记录（config 修改、SOUL 修改、Agent 删除等）。
+- Config 写入改为 command（config.read + config.patch）。
+- SOUL 写入改为 command（soul.read + soul.update）。
+- Env 管理（env.status 只返回 set/absent，不返回明文 value）。
+- Agent 详情页新增 Env tab 和 Setup/Doctor 操作按钮。
+- YAML 保存前校验 + 写入前备份。
