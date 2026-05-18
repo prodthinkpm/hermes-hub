@@ -478,10 +478,100 @@ function isWriteType(type: string): boolean {
   return WRITE_TYPES.has(type)
 }
 
-// -- 日志写入（Phase 3 占位，Phase 5 完整使用）--
+// -- 日志查询与脱敏（Phase 5）--
 
+// 日志脱敏规则：匹配常见密钥格式，替换为 '***REDACTED***'
+const SECRET_PATTERNS: [RegExp, string][] = [
+  // env key=secret 格式
+  [/(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|AUTH[_-]?TOKEN)\s*[=:]\s*\S+/gi, '$1=***REDACTED***'],
+  // OpenAI / Anthropic API key 格式
+  [/sk-[a-zA-Z0-9_-]{20,}/g, '***REDACTED***'],
+  // Bearer token
+  [/Bearer\s+[a-zA-Z0-9\-_.]+/gi, 'Bearer ***REDACTED***'],
+]
+
+export function sanitizeMessage(message: string): string {
+  let result = message
+  for (const [pattern, replacement] of SECRET_PATTERNS) {
+    result = result.replace(pattern, replacement)
+  }
+  return result
+}
+
+// DB row → LogEntry 映射（level→tone, created_at→time）
+export interface LogEntry {
+  id: string
+  time: string
+  source: string
+  message: string
+  tone: '' | 'ok' | 'err' | 'yellow'
+}
+
+interface DbLogRow {
+  id: number
+  level: string
+  message: string
+  source: string | null
+  created_at: string
+}
+
+function levelToTone(level: string): LogEntry['tone'] {
+  switch (level) {
+    case 'error': return 'err'
+    case 'warn': return 'yellow'
+    case 'ok': return 'ok'
+    default: return ''
+  }
+}
+
+function dbRowToLogEntry(row: DbLogRow): LogEntry {
+  return {
+    id: String(row.id),
+    time: row.created_at.replace('T', ' ').replace(/\.\d{3}Z$/, '').substring(11, 19),  // HH:MM:SS
+    source: row.source ?? 'hub',
+    message: row.message,
+    tone: levelToTone(row.level),
+  }
+}
+
+// 写入日志（自动脱敏）
 export function insertLog(db: Database.Database, level: string, message: string, source?: string): void {
+  const safe = sanitizeMessage(message)
   db.prepare(
     `INSERT INTO logs (level, message, source, created_at) VALUES (?, ?, ?, ?)`
-  ).run(level, message, source ?? null, new Date().toISOString())
+  ).run(level, safe, source ?? 'hub', new Date().toISOString())
+}
+
+const DEFAULT_LOG_LIMIT = 200
+
+export function getAllLogs(db: Database.Database, limit = DEFAULT_LOG_LIMIT, offset = 0): LogEntry[] {
+  const rows = db.prepare(
+    'SELECT * FROM logs ORDER BY id DESC LIMIT ? OFFSET ?'
+  ).all(limit, offset) as DbLogRow[]
+  return rows.reverse().map(dbRowToLogEntry)
+}
+
+export function getLogsForAgent(db: Database.Database, agentId: string, limit = DEFAULT_LOG_LIMIT, offset = 0): LogEntry[] {
+  // agentId 格式为 nodeId:profileName，同时匹配 source 中精确和模糊两种模式
+  const pattern = `%${agentId}%`
+  const rows = db.prepare(
+    'SELECT * FROM logs WHERE source LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?'
+  ).all(pattern, limit, offset) as DbLogRow[]
+  return rows.reverse().map(dbRowToLogEntry)
+}
+
+export function getLogsForNode(db: Database.Database, nodeId: string, limit = DEFAULT_LOG_LIMIT, offset = 0): LogEntry[] {
+  const pattern = `%${nodeId}%`
+  const rows = db.prepare(
+    'SELECT * FROM logs WHERE source LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?'
+  ).all(pattern, limit, offset) as DbLogRow[]
+  return rows.reverse().map(dbRowToLogEntry)
+}
+
+export function getLogsForCommand(db: Database.Database, commandId: string, limit = DEFAULT_LOG_LIMIT, offset = 0): LogEntry[] {
+  const pattern = `%${commandId}%`
+  const rows = db.prepare(
+    'SELECT * FROM logs WHERE source LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?'
+  ).all(pattern, limit, offset) as DbLogRow[]
+  return rows.reverse().map(dbRowToLogEntry)
 }

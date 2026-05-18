@@ -7,6 +7,7 @@ export type CommandType =
   | 'profile.scan' | 'profile.create' | 'profile.rename' | 'profile.delete'
   | 'gateway.start' | 'gateway.stop' | 'gateway.restart'
   | 'doctor.run' | 'setup.run'
+  | 'logs.tail'
 
 export interface HubNode {
   id: string

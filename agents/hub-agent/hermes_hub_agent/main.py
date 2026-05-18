@@ -7,6 +7,7 @@ import platform
 import socket
 import subprocess
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -346,6 +347,21 @@ def execute_command(command: dict[str, Any], hermes_home: Path) -> dict[str, Any
         if section != "all":
             args.append(section)
         return run_hermes(args, target_home, timeout=int(timeout))
+
+    # 日志尾部读取（默认返回最后 100 行）
+    if command_type == "logs.tail":
+        lines = payload.get("lines", 100)
+        if not isinstance(lines, int) or lines <= 0:
+            lines = 100
+        log_file = target_home / "logs" / "hermes.log"
+        if log_file.exists():
+            try:
+                content = "\n".join(deque(log_file.read_text(encoding="utf-8", errors="replace").splitlines(), maxlen=lines))
+            except OSError:
+                content = "(log file read error)"
+        else:
+            content = "(no log file)"
+        return {"ok": True, "stdout": truncate_output(content), "stderr": ""}
 
     return {"ok": False, "stdout": "", "stderr": f"Unsupported command type: {command_type}"}
 

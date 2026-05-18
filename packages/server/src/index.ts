@@ -28,6 +28,11 @@ import {
   getRunningCommandsForNode,
   getBusyAgentIds,
   pollNextPendingCommand,
+  getAllLogs,
+  getLogsForAgent,
+  getLogsForNode,
+  getLogsForCommand,
+  insertLog,
 } from './database.js'
 
 export interface ServerOptions {
@@ -119,7 +124,8 @@ function isCommandType(value: unknown): value is CommandType {
   return (
     value === 'profile.scan' || value === 'profile.create' || value === 'profile.rename' || value === 'profile.delete' ||
     value === 'gateway.start' || value === 'gateway.stop' || value === 'gateway.restart' ||
-    value === 'doctor.run' || value === 'setup.run'
+    value === 'doctor.run' || value === 'setup.run' ||
+    value === 'logs.tail'
   )
 }
 
@@ -200,7 +206,43 @@ function createCommand(
     updatedAt: timestamp,
   }
   upsertCommand(db, command)
+  // 高危操作写入审计日志
+  auditCommand(db, command)
   return { ok: true, command }
+}
+
+// 对高危命令类型写入审计日志
+function auditCommand(db: Database.Database, command: HubCommand): void {
+  const agentName = typeof command.payload?.profile_name === 'string' ? command.payload.profile_name : 'unknown'
+  const source = `cmd:${command.id}`
+  switch (command.type) {
+    case 'profile.create':
+      insertLog(db, 'warn', `Agent '${agentName}' created`, source)
+      break
+    case 'profile.delete':
+      insertLog(db, 'warn', `Agent '${agentName}' deleted`, source)
+      break
+    case 'profile.rename': {
+      const newName = typeof command.payload?.new_name === 'string' ? command.payload.new_name : '?'
+      insertLog(db, 'warn', `Agent '${agentName}' renamed to '${newName}'`, source)
+      break
+    }
+    case 'gateway.start':
+      insertLog(db, 'info', `Gateway started for '${agentName}'`, source)
+      break
+    case 'gateway.stop':
+      insertLog(db, 'warn', `Gateway stopped for '${agentName}'`, source)
+      break
+    case 'gateway.restart':
+      insertLog(db, 'info', `Gateway restarted for '${agentName}'`, source)
+      break
+    case 'setup.run':
+      insertLog(db, 'info', `Setup ran for '${agentName}'`, source)
+      break
+    case 'doctor.run':
+      insertLog(db, 'info', `Doctor ran for '${agentName}'`, source)
+      break
+  }
 }
 
 // 根据注册请求构造 node 对象并写入数据库，保留已有节点的历史数据
@@ -740,12 +782,31 @@ async function handlePublicApi(
     return true
   }
 
+  // Logs 路由（Phase 5）
   if (path === '/api/logs' || path === '/api/logs/') {
-    if (method !== 'GET') {
-      jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
-      return true
-    }
-    jsonReply(res, 200, { ok: true, data: [] })
+    if (method !== 'GET') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    jsonReply(res, 200, { ok: true, data: getAllLogs(db) })
+    return true
+  }
+
+  const profileLogsMatch = path.match(/^\/api\/profiles\/([^/]+)\/logs$/)
+  if (profileLogsMatch) {
+    if (method !== 'GET') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    jsonReply(res, 200, { ok: true, data: getLogsForAgent(db, decodeURIComponent(profileLogsMatch[1])) })
+    return true
+  }
+
+  const nodeLogsMatch = path.match(/^\/api\/nodes\/([^/]+)\/logs$/)
+  if (nodeLogsMatch) {
+    if (method !== 'GET') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    jsonReply(res, 200, { ok: true, data: getLogsForNode(db, decodeURIComponent(nodeLogsMatch[1])) })
+    return true
+  }
+
+  const commandLogsMatch = path.match(/^\/api\/commands\/([^/]+)\/logs$/)
+  if (commandLogsMatch) {
+    if (method !== 'GET') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    jsonReply(res, 200, { ok: true, data: getLogsForCommand(db, decodeURIComponent(commandLogsMatch[1])) })
     return true
   }
 
