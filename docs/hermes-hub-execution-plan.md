@@ -1,6 +1,6 @@
 # Hermes Hub 任务执行计划
 
-版本：v0.2
+版本：v0.3
 日期：2026-05-18
 分支：`refactor-controller-agent-architecture`
 目标：按 Controller-Agent 技术方案重构当前项目，保留现有 Web 视觉风格，替换底层架构模型。
@@ -48,6 +48,7 @@ Command Queue = 所有变更操作入口
 - Agent 写操作串行化：同一 agent 同时只允许一个写命令运行。
 - 命令超时处理：server 心跳检测 + Hub Agent subprocess timeout，默认 300s。
 - 命令结果轮询：Web 操作后等待命令完成，失败时展示 Hermes CLI 的 stderr 错误。
+- SQLite 持久化：5 张表（nodes/agents/commands/logs/metadata），WAL 模式，重启不丢数据。
 
 ### 已验证
 
@@ -60,13 +61,14 @@ profile.scan lifecycle                pending -> dispatched -> running -> succes
 agent write serialization             同一 agent 不会同时执行两个写命令
 command timeout detection             running 超时自动标记 timeout
 command error display                 Rename 失败时 Web 展示 stderr
+server restart persistence            register → kill → restart → /api/nodes 返回已注册 node
+hub.db tables created                 nodes, agents, commands, logs, metadata
 ```
 
 ### 当前边界
 
-- Phase 1-2 已完成，Controller-Agent 架构落地。
+- Phase 1-3 已完成，Controller-Agent 架构 + SQLite 持久化落地。
 - create / rename / delete 已走 command 流程。
-- 暂不引入数据库，Hub Server 使用内存状态。
 - 暂不做 setup / doctor / gateway 管理操作。
 - 暂不做远程节点、Docker、权限、审计。
 
@@ -202,7 +204,7 @@ python syntax ok                        passed
 
 ## 5. Phase 3：持久化与 Registry 稳定化
 
-状态：待开始
+状态：已完成
 
 ### 目标
 
@@ -218,34 +220,40 @@ python syntax ok                        passed
 
 ### 主要任务
 
-- 确认数据库技术方案：SQLite 起步，后续 PostgreSQL。
-- 新增数据表：
+- 确认数据库技术方案：SQLite（better-sqlite3）。（已完成）
+- 新增数据表：（已完成）
   - `nodes`
   - `agents`
   - `commands`
   - `logs`
-- Hub Server 从内存 Map 迁移到 repository/service 层。
-- Heartbeat 更新 node 与 agent 摘要。
-- Command 状态变化写入数据库。
-- 增加基础 migration 机制。
+- Hub Server 从内存 Map 迁移到 SQLite。（已完成）
+- Heartbeat 更新 node 与 agent 摘要。（已完成）
+- Command 状态变化写入数据库。（已完成）
+- 增加基础 migration 机制（`CREATE TABLE IF NOT EXISTS`）。（已完成）
 
 ### 交付物
 
-- 本地数据库文件。
-- 数据访问层。
+- 本地数据库文件 `~/.hermes-hub/hub.db`（WAL 模式）。
+- `packages/server/src/database.ts` 数据访问层。
 - Server 重启后仍能看到历史 Node / Agent / Command。
 
 ### 验收标准
 
-- Server 重启后 `/api/nodes` 不为空。
-- Server 重启后 `/api/agents` 保留最近一次 heartbeat 的摘要。
-- Command 历史可查询。
-- 构建和基础烟测通过。
+- Server 重启后 `/api/nodes` 不为空。 ✅
+- Server 重启后 `/api/agents` 保留最近一次 heartbeat 的摘要。 ✅
+- Command 历史可查询。 ✅
+- 构建和基础烟测通过。 ✅
 
-### 风险
+### 当前验证
 
-- 过早引入复杂 ORM 会拖慢重构。
-- 数据库 schema 如果和协议模型耦合过深，后续调整成本高。
+```text
+Server restart persistence               register → kill → restart → /api/nodes 返回已注册 node
+hub.db tables                            nodes, agents, commands, logs, metadata 全部创建
+next_command_number                      从 metadata 表原子递增，重启不丢失
+WAL mode                                 PRAGMA journal_mode = WAL
+foreign_keys                             PRAGMA foreign_keys = ON
+pnpm run build                           passed
+```
 
 ---
 
