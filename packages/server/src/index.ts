@@ -116,7 +116,11 @@ function validateHeartbeatBody(body: unknown): HubAgentHeartbeatRequest | null {
 }
 
 function isCommandType(value: unknown): value is CommandType {
-  return value === 'profile.scan' || value === 'profile.create' || value === 'profile.rename' || value === 'profile.delete'
+  return (
+    value === 'profile.scan' || value === 'profile.create' || value === 'profile.rename' || value === 'profile.delete' ||
+    value === 'gateway.start' || value === 'gateway.stop' || value === 'gateway.restart' ||
+    value === 'doctor.run' || value === 'setup.run'
+  )
 }
 
 function validateCreateCommandBody(body: unknown): CreateCommandRequest | null {
@@ -163,6 +167,13 @@ function createCommand(
   if (body.type === 'profile.rename') {
     const nextName = typeof body.payload?.new_name === 'string' ? body.payload.new_name.trim() : ''
     if (!nextName) return { ok: false, error: 'profile.rename requires payload.new_name' }
+  }
+  // gateway/doctor/setup 需要 agent 来确定操作的 profile
+  if (
+    (body.type.startsWith('gateway.') || body.type === 'doctor.run' || body.type === 'setup.run') &&
+    !agent
+  ) {
+    return { ok: false, error: `${body.type} requires a valid agentId` }
   }
 
   const timestamp = nowIso()
@@ -645,6 +656,57 @@ async function handlePublicApi(
       jsonReply(res, 400, { ok: false, error: result.error })
       return true
     }
+    jsonReply(res, 202, { ok: true, data: result.command })
+    return true
+  }
+
+  // Gateway start/stop/restart routes
+  const gatewayStartMatch = path.match(/^\/api\/profiles\/([^/]+)\/gateway\/start$/)
+  if (gatewayStartMatch) {
+    if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    const result = createCommand(db, { agentId: decodeURIComponent(gatewayStartMatch[1]), type: 'gateway.start', payload: {} })
+    if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
+    jsonReply(res, 202, { ok: true, data: result.command })
+    return true
+  }
+
+  const gatewayStopMatch = path.match(/^\/api\/profiles\/([^/]+)\/gateway\/stop$/)
+  if (gatewayStopMatch) {
+    if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    const result = createCommand(db, { agentId: decodeURIComponent(gatewayStopMatch[1]), type: 'gateway.stop', payload: {} })
+    if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
+    jsonReply(res, 202, { ok: true, data: result.command })
+    return true
+  }
+
+  const gatewayRestartMatch = path.match(/^\/api\/profiles\/([^/]+)\/gateway\/restart$/)
+  if (gatewayRestartMatch) {
+    if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    const result = createCommand(db, { agentId: decodeURIComponent(gatewayRestartMatch[1]), type: 'gateway.restart', payload: {} })
+    if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
+    jsonReply(res, 202, { ok: true, data: result.command })
+    return true
+  }
+
+  // Setup route
+  const setupMatch = path.match(/^\/api\/profiles\/([^/]+)\/setup$/)
+  if (setupMatch) {
+    if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    let setupBody: unknown = {}
+    try { setupBody = await readJsonBody(req) } catch { /* 允许空 body */ }
+    const section = isObject(setupBody) && typeof setupBody.section === 'string' ? setupBody.section : 'all'
+    const result = createCommand(db, { agentId: decodeURIComponent(setupMatch[1]), type: 'setup.run', payload: { section } })
+    if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
+    jsonReply(res, 202, { ok: true, data: result.command })
+    return true
+  }
+
+  // Doctor route
+  const doctorMatch = path.match(/^\/api\/profiles\/([^/]+)\/doctor$/)
+  if (doctorMatch) {
+    if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    const result = createCommand(db, { agentId: decodeURIComponent(doctorMatch[1]), type: 'doctor.run', payload: {} })
+    if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
     jsonReply(res, 202, { ok: true, data: result.command })
     return true
   }

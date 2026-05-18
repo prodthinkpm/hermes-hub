@@ -3,7 +3,10 @@ export type AgentSetupStatus = 'unknown' | 'ready' | 'needs_setup' | 'failed'
 export type AgentRuntimeStatus = 'unknown' | 'running' | 'stopped' | 'failed'
 export type AgentApiStatus = 'unknown' | 'enabled' | 'disabled' | 'failed'
 export type CommandStatus = 'pending' | 'dispatched' | 'running' | 'success' | 'failed' | 'timeout' | 'cancelled'
-export type CommandType = 'profile.scan' | 'profile.create' | 'profile.rename' | 'profile.delete'
+export type CommandType =
+  | 'profile.scan' | 'profile.create' | 'profile.rename' | 'profile.delete'
+  | 'gateway.start' | 'gateway.stop' | 'gateway.restart'
+  | 'doctor.run' | 'setup.run'
 
 export interface HubNode {
   id: string

@@ -42,7 +42,7 @@ onMounted(() => {
       </p>
       <div class="flex flex-wrap gap-2.5">
         <UiButton variant="primary" @click="router.push('/profiles')">Manage Agents</UiButton>
-        <UiButton variant="green" @click="hubStore.startAllGateways">Start All Gateways</UiButton>
+        <UiButton variant="green" @click="hubStore.batchStartGateways()">Start All Gateways</UiButton>
         <UiButton @click="router.push('/services')">Manage API Server</UiButton>
       </div>
     </section>

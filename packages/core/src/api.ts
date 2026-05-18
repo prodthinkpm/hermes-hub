@@ -176,6 +176,38 @@ export class HermesApiClient {
     return { ok: true, data: { commandId: result.data.id } }
   }
 
+  // Gateway 控制：对单个 agent 发起 start/stop/restart 命令
+  async startGateway(id: string): Promise<HermesApiResponse<HubCommand>> {
+    const result = await this.post<HubCommand>(`/api/profiles/${encodeURIComponent(id)}/gateway/start`, {})
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue gateway start' }
+    return { ok: true, data: result.data }
+  }
+
+  async stopGateway(id: string): Promise<HermesApiResponse<HubCommand>> {
+    const result = await this.post<HubCommand>(`/api/profiles/${encodeURIComponent(id)}/gateway/stop`, {})
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue gateway stop' }
+    return { ok: true, data: result.data }
+  }
+
+  async restartGateway(id: string): Promise<HermesApiResponse<HubCommand>> {
+    const result = await this.post<HubCommand>(`/api/profiles/${encodeURIComponent(id)}/gateway/restart`, {})
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue gateway restart' }
+    return { ok: true, data: result.data }
+  }
+
+  // Setup / Doctor
+  async runSetup(id: string, section: string = 'all'): Promise<HermesApiResponse<HubCommand>> {
+    const result = await this.post<HubCommand>(`/api/profiles/${encodeURIComponent(id)}/setup`, { section })
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue setup' }
+    return { ok: true, data: result.data }
+  }
+
+  async runDoctor(id: string): Promise<HermesApiResponse<HubCommand>> {
+    const result = await this.post<HubCommand>(`/api/profiles/${encodeURIComponent(id)}/doctor`, {})
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue doctor' }
+    return { ok: true, data: result.data }
+  }
+
   async listCommands(): Promise<HermesApiResponse<HubCommand[]>> {
     return this.get<HubCommand[]>('/api/commands')
   }

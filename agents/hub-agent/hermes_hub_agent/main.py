@@ -283,6 +283,11 @@ def execute_command(command: dict[str, Any], hermes_home: Path) -> dict[str, Any
     if not isinstance(timeout, (int, float)) or timeout <= 0:
         timeout = 300
 
+    # gateway/setup/doctor 操作的是特定 profile，使用 payload 中的 profile_home；
+    # profile.create 操作的是 root hermes_home（在根下创建 profile 目录）
+    target_home_str = payload.get("profile_home")
+    target_home = Path(target_home_str) if isinstance(target_home_str, str) and target_home_str else hermes_home
+
     if command_type == "profile.scan":
         return {"ok": True, "stdout": "Profile scan completed.", "stderr": ""}
 
@@ -317,6 +322,30 @@ def execute_command(command: dict[str, Any], hermes_home: Path) -> dict[str, Any
         if not profile_name:
             return {"ok": False, "stdout": "", "stderr": "profile_name is required"}
         return run_hermes(["profile", "delete", profile_name, "--yes"], hermes_home, timeout=int(timeout))
+
+    # Gateway 控制命令
+    if command_type == "gateway.start":
+        return run_hermes(["gateway", "start"], target_home, timeout=int(timeout))
+
+    if command_type == "gateway.stop":
+        return run_hermes(["gateway", "stop"], target_home, timeout=int(timeout))
+
+    if command_type == "gateway.restart":
+        return run_hermes(["gateway", "restart"], target_home, timeout=int(timeout))
+
+    # Doctor 检查
+    if command_type == "doctor.run":
+        return run_hermes(["doctor"], target_home, timeout=int(timeout))
+
+    # Setup 运行（支持 section 参数：model/terminal/gateway/tools/agent/all）
+    if command_type == "setup.run":
+        section = payload.get("section", "all")
+        if not isinstance(section, str):
+            section = "all"
+        args = ["setup"]
+        if section != "all":
+            args.append(section)
+        return run_hermes(args, target_home, timeout=int(timeout))
 
     return {"ok": False, "stdout": "", "stderr": f"Unsupported command type: {command_type}"}
 

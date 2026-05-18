@@ -180,12 +180,89 @@ export const useHubStore = defineStore('hub', () => {
     return result.data
   }
 
-  function runDoctor(): void {
-    showToast('Doctor queued', `Doctor checks queued for ${selectedCount.value || 'all'} agents.`)
+  // 单 agent gateway 操作
+  async function startGateway(id: string): Promise<{ ok: boolean; error?: string }> {
+    const result = await api.startGateway(id)
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue gateway start' }
+    const finalCmd = await api.waitForCommand(result.data.id)
+    if (finalCmd.ok && finalCmd.data) {
+      if (finalCmd.data.status === 'failed') return { ok: false, error: finalCmd.data.stderr || finalCmd.data.error || 'Gateway start failed' }
+      if (finalCmd.data.status === 'timeout') return { ok: false, error: finalCmd.data.error || 'Gateway start timed out' }
+    }
+    await fetchProfiles()
+    return { ok: true }
   }
 
-  function startAllGateways(): void {
-    showToast('Start queued', 'Gateway/API start queued for the selected agents.')
+  async function stopGateway(id: string): Promise<{ ok: boolean; error?: string }> {
+    const result = await api.stopGateway(id)
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue gateway stop' }
+    const finalCmd = await api.waitForCommand(result.data.id)
+    if (finalCmd.ok && finalCmd.data) {
+      if (finalCmd.data.status === 'failed') return { ok: false, error: finalCmd.data.stderr || finalCmd.data.error || 'Gateway stop failed' }
+      if (finalCmd.data.status === 'timeout') return { ok: false, error: finalCmd.data.error || 'Gateway stop timed out' }
+    }
+    await fetchProfiles()
+    return { ok: true }
+  }
+
+  async function restartGateway(id: string): Promise<{ ok: boolean; error?: string }> {
+    const result = await api.restartGateway(id)
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue gateway restart' }
+    const finalCmd = await api.waitForCommand(result.data.id)
+    if (finalCmd.ok && finalCmd.data) {
+      if (finalCmd.data.status === 'failed') return { ok: false, error: finalCmd.data.stderr || finalCmd.data.error || 'Gateway restart failed' }
+      if (finalCmd.data.status === 'timeout') return { ok: false, error: finalCmd.data.error || 'Gateway restart timed out' }
+    }
+    await fetchProfiles()
+    return { ok: true }
+  }
+
+  // Setup / Doctor
+  async function runSetup(id: string, section: string = 'all'): Promise<{ ok: boolean; error?: string }> {
+    const result = await api.runSetup(id, section)
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue setup' }
+    const finalCmd = await api.waitForCommand(result.data.id, 600_000)  // setup 可能耗时较长，最多等 10 分钟
+    if (finalCmd.ok && finalCmd.data) {
+      if (finalCmd.data.status === 'failed') return { ok: false, error: finalCmd.data.stderr || finalCmd.data.error || 'Setup failed' }
+      if (finalCmd.data.status === 'timeout') return { ok: false, error: finalCmd.data.error || 'Setup timed out' }
+    }
+    await fetchProfiles()
+    return { ok: true }
+  }
+
+  async function runDoctor(id: string): Promise<{ ok: boolean; error?: string }> {
+    const result = await api.runDoctor(id)
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue doctor' }
+    const finalCmd = await api.waitForCommand(result.data.id)
+    if (finalCmd.ok && finalCmd.data) {
+      if (finalCmd.data.status === 'failed') return { ok: false, error: finalCmd.data.stderr || finalCmd.data.error || 'Doctor failed' }
+      if (finalCmd.data.status === 'timeout') return { ok: false, error: finalCmd.data.error || 'Doctor timed out' }
+    }
+    await fetchProfiles()
+    return { ok: true }
+  }
+
+  // 批量 gateway 操作（作用于选中的 agents）
+  async function batchStartGateways(): Promise<void> {
+    const targets = profiles.value.filter((p) => p.checked)
+    if (targets.length === 0) { showToast('No selection', 'Select agents first.'); return }
+    let okCount = 0
+    for (const profile of targets) {
+      const res = await startGateway(profile.id)
+      if (res.ok) okCount++
+    }
+    showToast('Batch Start', `${okCount}/${targets.length} gateway starts queued.`)
+  }
+
+  async function batchStopGateways(): Promise<void> {
+    const targets = profiles.value.filter((p) => p.checked)
+    if (targets.length === 0) { showToast('No selection', 'Select agents first.'); return }
+    let okCount = 0
+    for (const profile of targets) {
+      const res = await stopGateway(profile.id)
+      if (res.ok) okCount++
+    }
+    showToast('Batch Stop', `${okCount}/${targets.length} gateway stops queued.`)
   }
 
   function createProfile(): void {
@@ -231,8 +308,15 @@ export const useHubStore = defineStore('hub', () => {
     fetchProfileSkills,
     fetchLogs,
     fetchProfileLogs,
+    // Gateway
+    startGateway,
+    stopGateway,
+    restartGateway,
+    batchStartGateways,
+    batchStopGateways,
+    // Setup / Doctor
+    runSetup,
     runDoctor,
-    startAllGateways,
     createProfile,
     toggleAllProfiles,
     disposeToastTimer,
