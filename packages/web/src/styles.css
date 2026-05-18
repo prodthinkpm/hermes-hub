@@ -1,0 +1,245 @@
+@import "tailwindcss";
+@config "../tailwind.config.js";
+
+/* ── Dark theme (default) ── */
+:root {
+  --abyss: #050507;
+  --carbon: #101010;
+  --charcoal: #3d3a39;
+  --signal: #00d992;
+  --mint: #2fd6a1;
+  --snow: #f2f2f2;
+  --parchment: #b8b3b0;
+  --slate: #8b949e;
+  --danger: #fb565b;
+  --warning: #ffba00;
+  --info: #4cb3d4;
+  --line: rgba(242, 242, 242, .11);
+  --surface: rgba(16, 16, 16, .82);
+  --surface-soft: rgba(242, 242, 242, .045);
+  --shadow-ambient: rgba(92, 88, 85, 0.2) 0px 0px 15px;
+  --shadow-dramatic: rgba(0, 0, 0, 0.7) 0px 20px 60px;
+  --font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+/* ── Light theme ── */
+[data-theme="light"] {
+  --abyss: #fafbfc;
+  --carbon: #ffffff;
+  --charcoal: #d4d4d8;
+  --signal: #008a5c;
+  --mint: #1a9e6e;
+  --snow: #1e1e2e;
+  --parchment: #52526b;
+  --slate: #71717a;
+  --danger: #dc2626;
+  --warning: #d97706;
+  --info: #0891b2;
+  --line: rgba(0, 0, 0, .08);
+  --surface: rgba(255, 255, 255, .88);
+  --surface-soft: rgba(0, 0, 0, .03);
+  --shadow-ambient: rgba(0, 0, 0, 0.06) 0px 0px 15px;
+  --shadow-dramatic: rgba(0, 0, 0, 0.1) 0px 20px 60px;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--snow);
+  font-family: var(--font);
+  background:
+    radial-gradient(circle at 18% 6%, rgba(0, 217, 146, .12), transparent 24%),
+    linear-gradient(180deg, #050507, #0b0b0c 48%, #050507);
+}
+
+[data-theme="light"] body {
+  background:
+    radial-gradient(circle at 18% 6%, rgba(0, 138, 92, .06), transparent 24%),
+    linear-gradient(180deg, #fafbfc, #f3f4f6 48%, #fafbfc);
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(242, 242, 242, .025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(242, 242, 242, .025) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(to bottom, #000, transparent 72%);
+  pointer-events: none;
+}
+
+[data-theme="light"] body::before {
+  background-image:
+    linear-gradient(rgba(0, 0, 0, .04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, .04) 1px, transparent 1px);
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+select option {
+  color: #111827;
+}
+
+.surface-panel {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow-dramatic);
+}
+
+.surface-soft {
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+
+.focus-ring:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+
+@layer components {
+  .app-panel {
+    @apply rounded-md border border-snow/10 bg-carbon/80;
+    box-shadow: var(--shadow-ambient);
+  }
+
+  .soft-card {
+    @apply rounded-md border border-snow/10;
+    background: var(--surface-soft);
+  }
+
+  .back-link {
+    @apply inline-flex min-h-9 items-center gap-2 rounded-md border border-snow/10 bg-snow/[.055] px-3 text-sm font-bold text-parchment transition hover:bg-snow/[.09] hover:text-snow focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-signal;
+  }
+
+  .editor-shell {
+    @apply overflow-hidden rounded-md border border-snow/10 bg-abyss;
+  }
+
+  .editor-titlebar {
+    @apply flex h-[42px] items-center gap-2 border-b border-snow/10 bg-snow/[.035] px-3.5;
+  }
+
+  .chip {
+    @apply rounded-md border border-snow/10 bg-snow/[.055] px-2.5 py-1.5 text-xs text-parchment;
+  }
+
+  .form-group {
+    @apply grid gap-2;
+  }
+
+  .form-group > span {
+    @apply text-[13px] font-extrabold text-snow;
+  }
+
+  .form-group > small {
+    @apply text-xs leading-6 text-slate;
+  }
+
+  .form-group input,
+  .form-group select,
+  .form-group textarea,
+  textarea,
+  input,
+  select {
+    @apply w-full rounded-md border border-snow/10 bg-snow/[.055] text-snow outline-none transition focus:border-signal/50;
+  }
+
+  .form-group input,
+  .form-group select,
+  input,
+  select {
+    @apply h-11 px-3;
+  }
+
+  .form-group textarea,
+  textarea {
+    @apply min-h-[130px] p-3 leading-7;
+    resize: vertical;
+  }
+
+  .note-card {
+    @apply mb-3.5 rounded-md border border-snow/10 p-4;
+    background: var(--surface-soft);
+  }
+
+  .note-card h4 {
+    @apply m-0 mb-2.5 text-base font-extrabold text-snow;
+  }
+
+  .note-card p,
+  .note-card li {
+    @apply text-[13px] leading-6 text-slate;
+  }
+
+  .content-card {
+    @apply rounded-md border border-snow/10 p-[18px];
+    background: var(--surface-soft);
+  }
+
+  .content-card h3 {
+    @apply my-3 mb-2 text-[17px] font-extrabold text-snow;
+  }
+
+  .content-card p {
+    @apply m-0 mb-3.5 text-[13px] leading-6 text-slate;
+  }
+
+  .yaml-box {
+    @apply max-h-[560px] overflow-auto whitespace-pre-wrap rounded-md border border-snow/10 bg-abyss p-[18px] font-mono text-xs leading-7 text-parchment;
+  }
+}
+
+.page-enter-active,
+.page-leave-active {
+  transition: opacity .18s ease, transform .18s ease;
+}
+
+.page-enter-from,
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.toast-enter-active,
+.toast-leave-active {
+  transition: opacity .22s ease, transform .22s ease;
+}
+
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translateY(12px);
+}
+
+.console-body::-webkit-scrollbar,
+.yaml-box::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.console-body::-webkit-scrollbar-thumb,
+.yaml-box::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(139, 148, 158, .42);
+}

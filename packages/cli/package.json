@@ -1,0 +1,22 @@
+{
+  "name": "hermes-hub",
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "bin": {
+    "hermes-hub": "./dist/cli.js"
+  },
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "build": "node -e \"require('fs').cpSync('../web/dist','dist/static',{recursive:true})\" && tsc",
+    "prepublishOnly": "pnpm -F @hermes-hub/web build && npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^25.8.0",
+    "typescript": "^6.0.3"
+  }
+}

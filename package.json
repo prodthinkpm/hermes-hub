@@ -1,0 +1,10 @@
+{
+  "name": "hermes-hub-root",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm -F @hermes-hub/web dev",
+    "build": "pnpm -F @hermes-hub/core build && pnpm -F @hermes-hub/web build && pnpm -F hermes-hub build",
+    "preview": "pnpm -F @hermes-hub/web preview"
+  }
+}
