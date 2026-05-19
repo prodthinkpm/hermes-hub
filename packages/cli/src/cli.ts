@@ -56,7 +56,7 @@ const staticDir = resolve(fileURLToPath(new URL('.', import.meta.url)), 'static'
 startServer({ ...opts, staticDir })
 
 if (opts.open) {
-  const url = `http://localhost:${opts.port}`
+  const url = `http://0.0.0.0:${opts.port}`
   const platform = process.platform
   const cmd =
     platform === 'darwin'
