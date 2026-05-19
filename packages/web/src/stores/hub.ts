@@ -35,9 +35,25 @@ export const useHubStore = defineStore('hub', () => {
     }, 2500)
   }
 
+  async function fetchServerInfo(): Promise<void> {
+    try {
+      const res = await fetch('/api/health')
+      if (res.ok) {
+        const body = await res.json()
+        if (body?.ok && body?.data) {
+          hubStatus.value = body.data.status ?? 'running'
+          hubVersion.value = body.data.version ?? '--'
+        }
+      }
+    } catch {
+      // Server unreachable, keep defaults
+    }
+  }
+
   async function fetchProfiles(): Promise<void> {
     isLoadingProfiles.value = true
     profilesError.value = null
+    void fetchServerInfo()
 
     const previousChecked = new Map(profiles.value.map((profile) => [profile.id, profile.checked]))
     const [agentResult, nodeResult] = await Promise.all([api.listAgents(), api.listNodes()])
