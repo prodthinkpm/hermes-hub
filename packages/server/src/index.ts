@@ -562,24 +562,28 @@ async function handleHubAgentApi(
       return true
     }
 
-    // Token 不匹配任何节点，也不是全局 token
+    // Token 不匹配任何节点
     const hasPerNodeToken = db.prepare('SELECT COUNT(*) AS count FROM nodes WHERE token IS NOT NULL').get() as { count: number }
     if (hasPerNodeToken.count > 0) {
-      jsonReply(res, 401, { ok: false, error: 'Invalid token. Create this node from the web UI first.' })
-    } else if (resolvedToken) {
-      jsonReply(res, 401, { ok: false, error: 'Invalid or missing registration token' })
-    } else {
-      // No tokens configured at all — allow registration (dev mode)
-      const nodeId = registerBody.node_id || `node-${randomBytes(4).toString('hex')}`
-      const node = upsertNode(db, { ...registerBody, node_id: nodeId })
-      jsonReply(res, 200, {
-        ok: true,
-        node_id: node.id,
-        server_time: nowIso(),
-        poll_interval_seconds: 3,
-        heartbeat_interval_seconds: 10,
-      })
+      // 已有 per-node tokens，强制要求有效 token
+      jsonReply(res, 401, { ok: false, error: 'Invalid token. Create this node from the web UI first, then run: hermes-hub-agent --hub-url=... --token=<node-token>' })
+      return true
     }
+    if (resolvedToken && registerBody.token) {
+      // 有全局 token 但 agent 提供的 token 不对
+      jsonReply(res, 401, { ok: false, error: 'Invalid registration token' })
+      return true
+    }
+    // 没有 per-node tokens，agent 也没提供 token — 允许注册（开发模式 / 向后兼容）
+    const nodeId = registerBody.node_id || `node-${randomBytes(4).toString('hex')}`
+    const node = upsertNode(db, { ...registerBody, node_id: nodeId })
+    jsonReply(res, 200, {
+      ok: true,
+      node_id: node.id,
+      server_time: nowIso(),
+      poll_interval_seconds: 3,
+      heartbeat_interval_seconds: 10,
+    })
     return true
   }
 
