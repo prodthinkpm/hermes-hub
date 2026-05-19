@@ -186,7 +186,7 @@ onMounted(() => {
                   @click="router.push('/nodes/' + node.id)"
                 >{{ node.name }}</td>
                 <td class="border-b border-snow/10 px-[18px] py-[15px]" @click="router.push('/nodes/' + node.id)">
-                  <StatusBadge :tone="statusTone(node.status)" :text="node.status" />
+                  <StatusBadge :tone="statusTone(node.status)">{{ node.status }}</StatusBadge>
                 </td>
                 <td class="border-b border-snow/10 px-[18px] py-[15px]" @click="router.push('/nodes/' + node.id)">{{ node.hostname || '—' }} / {{ node.os || '—' }}</td>
                 <td class="border-b border-snow/10 px-[18px] py-[15px] font-mono" @click="router.push('/nodes/' + node.id)">{{ node.hermesHome || '—' }}</td>

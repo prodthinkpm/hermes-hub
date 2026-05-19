@@ -70,12 +70,10 @@ onMounted(() => {
 
 <template>
   <div class="p-7 max-[760px]:p-[18px]">
-    <div class="mb-5 flex items-center gap-3">
-      <button
-        class="rounded-md border border-snow/10 px-3 py-1.5 text-[13px] font-bold text-slate transition hover:bg-snow/[.065] hover:text-snow"
-        @click="router.push('/nodes')"
-      >
-        Back to Nodes
+    <div class="mb-5">
+      <button class="back-link" type="button" @click="router.push('/nodes')">
+        <span>&lt;-</span>
+        <span>Back</span>
       </button>
     </div>
 
@@ -104,7 +102,7 @@ onMounted(() => {
           <div>
             <span class="text-[11px] uppercase tracking-[.1em] text-slate">Status</span>
             <p class="mt-0.5">
-              <StatusBadge :tone="statusTone(node.status)" :text="node.status" />
+              <StatusBadge :tone="statusTone(node.status)">{{ node.status }}</StatusBadge>
             </p>
           </div>
           <div>
