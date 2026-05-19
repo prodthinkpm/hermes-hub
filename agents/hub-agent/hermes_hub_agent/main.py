@@ -65,27 +65,23 @@ def cmd_init(args: argparse.Namespace) -> None:
         DEFAULT_HEARTBEAT_INTERVAL,
         DEFAULT_HERMES_HOME,
         DEFAULT_HUB_URL,
-        DEFAULT_NODE_NAME,
         DEFAULT_VKEY,
         write_config,
     )
 
     hub_url = args.hub_url or DEFAULT_HUB_URL
-    node_name = args.node_name or DEFAULT_NODE_NAME
     hermes_home = args.hermes_home or DEFAULT_HERMES_HOME
     heartbeat_interval = args.interval or DEFAULT_HEARTBEAT_INTERVAL
     vkey = args.vkey or DEFAULT_VKEY
 
     config_file = write_config(
         hub_url=hub_url,
-        node_name=node_name,
         hermes_home=hermes_home,
         heartbeat_interval=heartbeat_interval,
         vkey=vkey,
     )
     print(f"Configuration written to {config_file}")
     print(f"  hub_url: {hub_url}")
-    print(f"  node_name: {node_name}")
     print(f"  hermes_home: {hermes_home}")
     print(f"  heartbeat_interval: {heartbeat_interval}")
     if vkey:
@@ -180,7 +176,6 @@ def main() -> None:
 
     init_parser = subparsers.add_parser("init", help="Generate a configuration file")
     init_parser.add_argument("--hub-url", default=None, help="Hub server URL for config")
-    init_parser.add_argument("--node-name", default=None, help="Human-readable node name for config")
     init_parser.add_argument("--hermes-home", default=None, help="Hermes home path for config")
     init_parser.add_argument("--interval", type=int, default=None, help="Heartbeat interval in seconds for config")
     init_parser.add_argument("--vkey", default=None, help="Verification key (vkey) for the hub server")
