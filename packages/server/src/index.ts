@@ -26,8 +26,8 @@ import {
   deleteNode,
   updateNodeFields,
   createNodeRecord,
-  getNodeByToken,
-  getNodeToken as dbGetNodeToken,
+  getNodeByVkey,
+  getNodeVkey as dbGetNodeVkey,
   getCommand,
   getAllCommands,
   upsertCommand,
@@ -486,6 +486,77 @@ function authenticateRequest(req: IncomingMessage): DbUserRow | null {
   return { id: payload.sub, username: (payload.username as string) ?? '', password_hash: '', role: (payload.role as string) ?? 'viewer', created_at: '' }
 }
 
+function extractHubAgentVkey(req: IncomingMessage): string | null {
+  const auth = req.headers.authorization
+  if (auth?.startsWith('Bearer ')) {
+    const vkey = auth.slice(7).trim()
+    return vkey || null
+  }
+  const header = req.headers['x-hermes-hub-vkey']
+  const value = Array.isArray(header) ? header[0] : header
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function hasAnyNodeVkey(db: Database.Database): boolean {
+  const row = db.prepare('SELECT COUNT(*) AS count FROM nodes WHERE token IS NOT NULL').get() as { count: number }
+  return row.count > 0
+}
+
+function validateHubAgentVkey(db: Database.Database, nodeId: string, req: IncomingMessage): boolean {
+  const vkey = extractHubAgentVkey(req)
+  const nodeVkey = dbGetNodeVkey(db, nodeId)
+  if (nodeVkey) {
+    return vkey === nodeVkey
+  }
+  if (resolvedToken) {
+    return vkey === resolvedToken
+  }
+  if (hasAnyNodeVkey(db)) {
+    if (!vkey) return false
+    const found = getNodeByVkey(db, vkey)
+    return found?.node.id === nodeId
+  }
+  return true
+}
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value
+}
+
+function requestHubUrl(req: IncomingMessage): string {
+  const forwardedProto = headerValue(req.headers['x-forwarded-proto'])
+  const proto = forwardedProto?.split(',')[0]?.trim() || 'http'
+  const forwardedHost = headerValue(req.headers['x-forwarded-host'])
+  const host = forwardedHost?.split(',')[0]?.trim() || req.headers.host || `localhost:${serverPort}`
+  return `${proto}://${host}`
+}
+
+function hubAgentCommand(req: IncomingMessage, _nodeId: string, vkey: string): string {
+  return `hermes-hub-agent --hub-url=${requestHubUrl(req)} --vkey=${vkey}`
+}
+
+function vkeyFingerprint(vkey: string | undefined): string {
+  if (!vkey) return 'none'
+  return vkey.length <= 6 ? vkey : vkey.slice(-6)
+}
+
+function rejectHubAgentRegister(
+  res: ServerResponse,
+  db: Database.Database,
+  code: string,
+  error: string,
+  nodeId: string | undefined,
+  vkey: string | undefined,
+): void {
+  insertLog(
+    db,
+    'warn',
+    `Hub Agent register rejected: code=${code} node_id=${nodeId || 'none'} vkey_tail=${vkeyFingerprint(vkey)}`,
+    'hub-agent',
+  )
+  jsonReply(res, 401, { ok: false, code, error })
+}
+
 async function handleHubAgentApi(
   path: string,
   method: string,
@@ -506,6 +577,67 @@ async function handleHubAgentApi(
       return true
     }
     const registerBody = validateRegisterBody(body)
+    if (!registerBody) {
+      jsonReply(res, 400, { ok: false, error: 'Invalid register payload' })
+      return true
+    }
+    {
+      const vkey = registerBody.vkey?.trim()
+
+      // Phase 10: vkey 唯一标识节点，不需要 node_id
+      if (vkey) {
+        const found = getNodeByVkey(db, vkey)
+        if (found) {
+          // 更新节点运行时信息
+          const timestamp = nowIso()
+          const updated: HubNode = {
+            ...found.node,
+            name: registerBody.name?.trim() || found.node.name,
+            hostname: registerBody.hostname,
+            os: registerBody.runtime.os,
+            arch: registerBody.runtime.arch,
+            agentVersion: registerBody.agent_version,
+            hermesVersion: registerBody.hermes_version || found.node.hermesVersion,
+            hermesHome: registerBody.hermes_home,
+            status: 'online',
+            capabilities: stringArrayFromFlags(registerBody.capabilities),
+            tags: registerBody.tags ?? found.node.tags,
+            updatedAt: timestamp,
+          }
+          dbUpsertNode(db, updated)
+          jsonReply(res, 200, {
+            ok: true,
+            node_id: updated.id,
+            server_time: timestamp,
+            poll_interval_seconds: 3,
+            heartbeat_interval_seconds: 10,
+          })
+          return true
+        }
+        // vkey not found in any node
+        rejectHubAgentRegister(res, db, 'vkey_not_found',
+          'Node not found for this vkey. Create the node from the web UI first, then run: hermes-hub-agent --hub-url=... --vkey=<vkey>',
+          undefined, vkey)
+        return true
+      }
+
+      // Fallback: agent sent old-style node_id without vkey — backward compat
+      const fallbackNodeId = registerBody.node_id?.trim() || `node-${randomBytes(4).toString('hex')}`
+      if (!resolvedToken) {
+        // No tokens configured — allow registration (dev mode)
+        const node = upsertNode(db, { ...registerBody, node_id: fallbackNodeId })
+        jsonReply(res, 200, {
+          ok: true, node_id: node.id, server_time: nowIso(),
+          poll_interval_seconds: 3, heartbeat_interval_seconds: 10,
+        })
+        return true
+      }
+      rejectHubAgentRegister(res, db, 'missing_vkey',
+        'Missing vkey. Create a Node in the web UI and run the generated command.',
+        fallbackNodeId, undefined)
+      return true
+    }
+    /*
     if (!registerBody) {
       jsonReply(res, 400, { ok: false, error: 'Invalid register payload' })
       return true
@@ -569,7 +701,7 @@ async function handleHubAgentApi(
       jsonReply(res, 401, { ok: false, error: 'Invalid token. Create this node from the web UI first, then run: hermes-hub-agent --hub-url=... --token=<node-token>' })
       return true
     }
-    if (resolvedToken && registerBody.token) {
+    if (resolvedToken) {
       // 有全局 token 但 agent 提供的 token 不对
       jsonReply(res, 401, { ok: false, error: 'Invalid registration token' })
       return true
@@ -585,6 +717,7 @@ async function handleHubAgentApi(
       heartbeat_interval_seconds: 10,
     })
     return true
+    */
   }
 
   const pollMatch = path.match(/^\/api\/hub-agents\/([^/]+)\/commands\/poll$/)
@@ -596,6 +729,10 @@ async function handleHubAgentApi(
     const nodeId = decodeURIComponent(pollMatch[1])
     if (!getNode(db, nodeId)) {
       jsonReply(res, 404, { ok: false, error: `Node '${nodeId}' is not registered` })
+      return true
+    }
+    if (!validateHubAgentVkey(db, nodeId, req)) {
+      jsonReply(res, 401, { ok: false, error: 'Invalid hub agent token' })
       return true
     }
     const timestamp = nowIso()
@@ -621,6 +758,14 @@ async function handleHubAgentApi(
     }
     const nodeId = decodeURIComponent(commandStartedMatch[1])
     const commandId = decodeURIComponent(commandStartedMatch[2])
+    if (!getNode(db, nodeId)) {
+      jsonReply(res, 404, { ok: false, error: `Node '${nodeId}' is not registered` })
+      return true
+    }
+    if (!validateHubAgentVkey(db, nodeId, req)) {
+      jsonReply(res, 401, { ok: false, error: 'Invalid hub agent token' })
+      return true
+    }
     const command = getCommand(db, commandId)
     if (!command || command.nodeId !== nodeId) {
       jsonReply(res, 404, { ok: false, error: `Command '${commandId}' not found` })
@@ -643,6 +788,14 @@ async function handleHubAgentApi(
     }
     const nodeId = decodeURIComponent(commandResultMatch[1])
     const commandId = decodeURIComponent(commandResultMatch[2])
+    if (!getNode(db, nodeId)) {
+      jsonReply(res, 404, { ok: false, error: `Node '${nodeId}' is not registered` })
+      return true
+    }
+    if (!validateHubAgentVkey(db, nodeId, req)) {
+      jsonReply(res, 401, { ok: false, error: 'Invalid hub agent token' })
+      return true
+    }
     const command = getCommand(db, commandId)
     if (!command || command.nodeId !== nodeId) {
       jsonReply(res, 404, { ok: false, error: `Command '${commandId}' not found` })
@@ -686,6 +839,10 @@ async function handleHubAgentApi(
   const node = getNode(db, nodeId)
   if (!node) {
     jsonReply(res, 404, { ok: false, error: `Node '${nodeId}' is not registered` })
+    return true
+  }
+  if (!validateHubAgentVkey(db, nodeId, req)) {
+    jsonReply(res, 401, { ok: false, error: 'Invalid hub agent token' })
     return true
   }
 
@@ -883,12 +1040,11 @@ async function handlePublicApi(
         ? body.name.trim()
         : `node-${randomBytes(4).toString('hex')}`
       const nodeId = `node-${randomBytes(4).toString('hex')}`
-      const nodeToken = randomUUID()
-      const node = createNodeRecord(db, nodeId, nodeName, nodeToken)
-      insertLog(db, 'info', `Node '${nodeId}' (${nodeName}) created via API with token`, 'hub')
-      const displayUrl = `http://localhost:${serverPort}`
-      const command = `hermes-hub-agent --hub-url=${displayUrl} --token=${nodeToken}`
-      jsonReply(res, 201, { ok: true, data: { node, token: nodeToken, command } })
+      const nodeVkey = randomUUID().replace(/-/g, '')
+      const node = createNodeRecord(db, nodeId, nodeName, nodeVkey)
+      insertLog(db, 'info', `Node '${nodeId}' (${nodeName}) created via API with vkey`, 'hub')
+      const command = hubAgentCommand(req, nodeId, nodeVkey)
+      jsonReply(res, 201, { ok: true, data: { node, vkey: nodeVkey, command } })
       return true
     }
     jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
@@ -896,25 +1052,24 @@ async function handlePublicApi(
   }
 
   // Node token endpoint (admin only, Phase 10)
-  const nodeTokenMatch = path.match(/^\/api\/nodes\/([^/]+)\/token$/)
-  if (nodeTokenMatch) {
+  const nodeVkeyMatch = path.match(/^\/api\/nodes\/([^/]+)\/vkey$/)
+  if (nodeVkeyMatch) {
     if (method !== 'GET') {
       jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
       return true
     }
     if (userRole < 2) {
-      jsonReply(res, 403, { ok: false, error: 'Admin role required to view node tokens' })
+      jsonReply(res, 403, { ok: false, error: 'Admin role required to view node vkeys' })
       return true
     }
-    const nodeId = decodeURIComponent(nodeTokenMatch[1])
-    const token = dbGetNodeToken(db, nodeId)
-    if (!token) {
-      jsonReply(res, 404, { ok: false, error: `Node '${nodeId}' not found or has no token` })
+    const nodeId = decodeURIComponent(nodeVkeyMatch[1])
+    const vkey = dbGetNodeVkey(db, nodeId)
+    if (!vkey) {
+      jsonReply(res, 404, { ok: false, error: `Node '${nodeId}' not found or has no vkey` })
       return true
     }
-    const displayUrl = `http://localhost:${serverPort}`
-    const command = `hermes-hub-agent --hub-url=${displayUrl} --token=${token}`
-    jsonReply(res, 200, { ok: true, data: { token, command } })
+    const command = hubAgentCommand(req, nodeId, vkey)
+    jsonReply(res, 200, { ok: true, data: { vkey, command } })
     return true
   }
 

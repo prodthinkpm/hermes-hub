@@ -20,7 +20,7 @@ const newNodeName = ref('')
 const creating = ref(false)
 const createError = ref('')
 const expandedNodeId = ref<string | null>(null)
-const nodeCommands = ref<Record<string, { token: string; command: string }>>({})
+const nodeCommands = ref<Record<string, { vkey: string; command: string }>>({})
 const copiedNodeId = ref<string | null>(null)
 
 const nodeStats = computed<StatItem[]>(() => {
@@ -56,8 +56,8 @@ async function doCreateNode() {
   creating.value = true
   createError.value = ''
   const result = await hubStore.createNode(newNodeName.value.trim() || undefined)
-  if (result.ok && result.node && result.token && result.command) {
-    nodeCommands.value[result.node.id] = { token: result.token, command: result.command }
+  if (result.ok && result.node && result.vkey && result.command) {
+    nodeCommands.value[result.node.id] = { vkey: result.vkey, command: result.command }
     expandedNodeId.value = result.node.id
     newNodeName.value = ''
     showCreateForm.value = false
@@ -74,7 +74,7 @@ function toggleExpand(nodeId: string) {
   }
   expandedNodeId.value = nodeId
   if (!nodeCommands.value[nodeId]) {
-    hubStore.fetchNodeToken(nodeId).then((data) => {
+    hubStore.fetchNodeVkey(nodeId).then((data) => {
       if (data) nodeCommands.value[nodeId] = data
     })
   }

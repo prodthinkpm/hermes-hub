@@ -354,16 +354,17 @@ export function getAllNodes(db: Database.Database): HubNode[] {
 }
 
 export function upsertNode(db: Database.Database, node: HubNode): void {
-  const row = nodeToRow(node)
+  const existingToken = db.prepare('SELECT token FROM nodes WHERE id = ?').get(node.id) as { token: string | null } | undefined
+  const row = { ...nodeToRow(node), token: existingToken?.token ?? null }
   db.prepare(`
     INSERT OR REPLACE INTO nodes
       (id, name, hostname, os, arch, agent_version, hermes_version, hermes_home,
        status, capabilities, tags, last_heartbeat_at, profiles_total,
-       gateway_running, created_at, updated_at)
+       gateway_running, created_at, updated_at, token)
     VALUES
       (@id, @name, @hostname, @os, @arch, @agent_version, @hermes_version, @hermes_home,
        @status, @capabilities, @tags, @last_heartbeat_at, @profiles_total,
-       @gateway_running, @created_at, @updated_at)
+       @gateway_running, @created_at, @updated_at, @token)
   `).run(row)
 }
 
@@ -437,13 +438,13 @@ export function updateNodeFields(
   return merged
 }
 
-// -- Node creation with token (Phase 10) --
+// -- Node creation with vkey (Phase 10) --
 
 export function createNodeRecord(
   db: Database.Database,
   id: string,
   name: string,
-  token: string,
+  vkey: string,
 ): HubNode {
   const timestamp = new Date().toISOString()
   const node: HubNode = {
@@ -464,18 +465,17 @@ export function createNodeRecord(
     updatedAt: timestamp,
   }
   upsertNode(db, node)
-  // Store token separately (not in HubNode interface)
-  db.prepare('UPDATE nodes SET token = ? WHERE id = ?').run(token, id)
+  db.prepare('UPDATE nodes SET token = ? WHERE id = ?').run(vkey, id)
   return node
 }
 
-export function getNodeByToken(db: Database.Database, token: string): { node: HubNode; token: string } | undefined {
-  const row = db.prepare('SELECT * FROM nodes WHERE token = ?').get(token) as DbNodeRow | undefined
+export function getNodeByVkey(db: Database.Database, vkey: string): { node: HubNode; vkey: string } | undefined {
+  const row = db.prepare('SELECT * FROM nodes WHERE token = ?').get(vkey) as DbNodeRow | undefined
   if (!row?.token) return undefined
-  return { node: rowToNode(row), token: row.token }
+  return { node: rowToNode(row), vkey: row.token }
 }
 
-export function getNodeToken(db: Database.Database, nodeId: string): string | undefined {
+export function getNodeVkey(db: Database.Database, nodeId: string): string | undefined {
   const row = db.prepare('SELECT token FROM nodes WHERE id = ?').get(nodeId) as { token: string | null } | undefined
   return row?.token ?? undefined
 }

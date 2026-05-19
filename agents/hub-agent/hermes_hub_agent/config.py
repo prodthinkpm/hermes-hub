@@ -31,7 +31,7 @@ DEFAULT_NODE_ID = "local"
 DEFAULT_NODE_NAME = "My Node"
 DEFAULT_HERMES_HOME = "~/.hermes"
 DEFAULT_HEARTBEAT_INTERVAL = 10
-DEFAULT_TOKEN = ""
+DEFAULT_VKEY = ""
 
 
 def generate_config_content(
@@ -40,7 +40,7 @@ def generate_config_content(
     node_name: str = DEFAULT_NODE_NAME,
     hermes_home: str = DEFAULT_HERMES_HOME,
     heartbeat_interval: int = DEFAULT_HEARTBEAT_INTERVAL,
-    token: str = DEFAULT_TOKEN,
+    vkey: str = DEFAULT_VKEY,
 ) -> str:
     """Generate YAML config file content."""
     lines = [
@@ -50,8 +50,8 @@ def generate_config_content(
         f"hermes_home: {hermes_home}",
         f"heartbeat_interval: {heartbeat_interval}",
     ]
-    if token:
-        lines.append(f"token: {token}")
+    if vkey:
+        lines.append(f"vkey: {vkey}")
     return "\n".join(lines) + "\n"
 
 
@@ -61,7 +61,7 @@ def write_config(
     node_name: str = DEFAULT_NODE_NAME,
     hermes_home: str = DEFAULT_HERMES_HOME,
     heartbeat_interval: int = DEFAULT_HEARTBEAT_INTERVAL,
-    token: str = DEFAULT_TOKEN,
+    vkey: str = DEFAULT_VKEY,
 ) -> Path:
     """Write the config file and return its path."""
     cdir = config_dir()
@@ -73,7 +73,7 @@ def write_config(
         node_name=node_name,
         hermes_home=hermes_home,
         heartbeat_interval=heartbeat_interval,
-        token=token,
+        vkey=vkey,
     )
     cpath.write_text(content, encoding="utf-8")
     return cpath

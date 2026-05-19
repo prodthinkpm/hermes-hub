@@ -57,7 +57,7 @@ export interface ManagedAgent {
 }
 
 export interface HubAgentRegisterRequest {
-  node_id?: string  // Phase 10: optional, token identifies the node
+  node_id?: string  // Phase 10: optional fallback, vkey is preferred
   name?: string
   hostname: string
   agent_version: string
@@ -69,7 +69,7 @@ export interface HubAgentRegisterRequest {
   }
   capabilities?: Record<string, boolean>
   tags?: string[]
-  token?: string
+  vkey?: string  // Phase 10: vkey identifies the node
 }
 
 export interface HubNodeUpdateRequest {
@@ -193,11 +193,11 @@ export interface CreateNodeRequest {
 
 export interface CreateNodeResponse {
   node: HubNode
-  token: string
+  vkey: string
   command: string
 }
 
-export interface NodeTokenResponse {
-  token: string
+export interface NodeVkeyResponse {
+  vkey: string
   command: string
 }

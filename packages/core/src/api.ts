@@ -173,12 +173,12 @@ export class HermesApiClient {
     return this.get<HubNode>(`/api/nodes/${encodeURIComponent(id)}`)
   }
 
-  async createNode(name?: string): Promise<HermesApiResponse<{ node: HubNode; token: string; command: string }>> {
-    return this.post<{ node: HubNode; token: string; command: string }>('/api/nodes', { name })
+  async createNode(name?: string): Promise<HermesApiResponse<{ node: HubNode; vkey: string; command: string }>> {
+    return this.post<{ node: HubNode; vkey: string; command: string }>('/api/nodes', { name })
   }
 
-  async getNodeToken(nodeId: string): Promise<HermesApiResponse<{ token: string; command: string }>> {
-    return this.get<{ token: string; command: string }>(`/api/nodes/${encodeURIComponent(nodeId)}/token`)
+  async getNodeVkey(nodeId: string): Promise<HermesApiResponse<{ vkey: string; command: string }>> {
+    return this.get<{ vkey: string; command: string }>(`/api/nodes/${encodeURIComponent(nodeId)}/vkey`)
   }
 
   async updateNode(id: string, fields: Partial<Pick<HubNode, 'name' | 'status' | 'tags'>>): Promise<HermesApiResponse<HubNode>> {
