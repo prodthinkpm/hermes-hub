@@ -27,7 +27,6 @@ def config_path() -> Path:
 
 
 DEFAULT_HUB_URL = "http://localhost:3000"
-DEFAULT_NODE_ID = "local"
 DEFAULT_NODE_NAME = "My Node"
 DEFAULT_HERMES_HOME = "~/.hermes"
 DEFAULT_HEARTBEAT_INTERVAL = 10
@@ -36,7 +35,6 @@ DEFAULT_VKEY = ""
 
 def generate_config_content(
     hub_url: str = DEFAULT_HUB_URL,
-    node_id: str = DEFAULT_NODE_ID,
     node_name: str = DEFAULT_NODE_NAME,
     hermes_home: str = DEFAULT_HERMES_HOME,
     heartbeat_interval: int = DEFAULT_HEARTBEAT_INTERVAL,
@@ -45,7 +43,6 @@ def generate_config_content(
     """Generate YAML config file content."""
     lines = [
         f"hub_url: {hub_url}",
-        f"node_id: {node_id}",
         f"node_name: {node_name}",
         f"hermes_home: {hermes_home}",
         f"heartbeat_interval: {heartbeat_interval}",
@@ -57,7 +54,6 @@ def generate_config_content(
 
 def write_config(
     hub_url: str = DEFAULT_HUB_URL,
-    node_id: str = DEFAULT_NODE_ID,
     node_name: str = DEFAULT_NODE_NAME,
     hermes_home: str = DEFAULT_HERMES_HOME,
     heartbeat_interval: int = DEFAULT_HEARTBEAT_INTERVAL,
@@ -69,7 +65,6 @@ def write_config(
     cpath = config_path()
     content = generate_config_content(
         hub_url=hub_url,
-        node_id=node_id,
         node_name=node_name,
         hermes_home=hermes_home,
         heartbeat_interval=heartbeat_interval,

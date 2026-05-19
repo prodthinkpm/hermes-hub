@@ -24,7 +24,7 @@ def is_docker_runtime() -> bool:
         return False
 
 
-def build_register_payload(node_id: str, node_name: str, hermes_home: Path) -> dict[str, Any]:
+def build_register_payload(node_name: str, hermes_home: Path) -> dict[str, Any]:
     tags = ["local"]
     if is_docker_runtime():
         tags.append("docker")
@@ -65,14 +65,12 @@ def cmd_init(args: argparse.Namespace) -> None:
         DEFAULT_HEARTBEAT_INTERVAL,
         DEFAULT_HERMES_HOME,
         DEFAULT_HUB_URL,
-        DEFAULT_NODE_ID,
         DEFAULT_NODE_NAME,
         DEFAULT_VKEY,
         write_config,
     )
 
     hub_url = args.hub_url or DEFAULT_HUB_URL
-    node_id = args.node_id or DEFAULT_NODE_ID
     node_name = args.node_name or DEFAULT_NODE_NAME
     hermes_home = args.hermes_home or DEFAULT_HERMES_HOME
     heartbeat_interval = args.interval or DEFAULT_HEARTBEAT_INTERVAL
@@ -80,7 +78,6 @@ def cmd_init(args: argparse.Namespace) -> None:
 
     config_file = write_config(
         hub_url=hub_url,
-        node_id=node_id,
         node_name=node_name,
         hermes_home=hermes_home,
         heartbeat_interval=heartbeat_interval,
@@ -88,7 +85,6 @@ def cmd_init(args: argparse.Namespace) -> None:
     )
     print(f"Configuration written to {config_file}")
     print(f"  hub_url: {hub_url}")
-    print(f"  node_id: {node_id}")
     print(f"  node_name: {node_name}")
     print(f"  hermes_home: {hermes_home}")
     print(f"  heartbeat_interval: {heartbeat_interval}")
@@ -140,7 +136,6 @@ def cmd_run(args: argparse.Namespace) -> None:
         return default
 
     hub_url = _resolve(args.hub_url, "HERMES_HUB_URL", "hub_url", "http://localhost:3000")
-    node_id = _resolve(args.node_id, "HERMES_NODE_ID", "node_id", "local")
     node_name = _resolve(args.node_name, "HERMES_NODE_NAME", "node_name", "local")
     hermes_home_str = _resolve(args.hermes_home, "HERMES_HOME", "hermes_home", str(default_hermes_home()))
     interval = int(_resolve(args.interval, "HERMES_HUB_HEARTBEAT_INTERVAL", "heartbeat_interval", 10))
@@ -149,10 +144,10 @@ def cmd_run(args: argparse.Namespace) -> None:
     hermes_home = Path(hermes_home_str).expanduser()
     client = HubClient(hub_url, vkey=vkey)
     try:
-        register_response = client.register(build_register_payload(node_id, node_name, hermes_home))
-        registered_node_id = register_response.get("node_id")
-        if isinstance(registered_node_id, str) and registered_node_id:
-            node_id = registered_node_id
+        register_response = client.register(build_register_payload(node_name, hermes_home))
+        node_id = register_response.get("node_id")
+        if not isinstance(node_id, str) or not node_id:
+            raise RuntimeError("Server did not return a node_id")
         client.heartbeat(node_id, build_heartbeat_payload(hermes_home))
         print(f"registered node '{node_id}' and scanned {hermes_home}")
 
@@ -190,7 +185,6 @@ def main() -> None:
 
     run_parser = subparsers.add_parser("run", help="Run the agent loop (default)")
     run_parser.add_argument("--hub-url", default=None, help="Hub server URL")
-    run_parser.add_argument("--node-id", default=None, help="Node identifier")
     run_parser.add_argument("--node-name", default=None, help="Human-readable node name")
     run_parser.add_argument("--hermes-home", default=None, help="Path to Hermes home directory")
     run_parser.add_argument("--interval", type=int, default=None, help="Heartbeat interval in seconds")
@@ -200,7 +194,6 @@ def main() -> None:
 
     init_parser = subparsers.add_parser("init", help="Generate a configuration file")
     init_parser.add_argument("--hub-url", default=None, help="Hub server URL for config")
-    init_parser.add_argument("--node-id", default=None, help="Node identifier for config")
     init_parser.add_argument("--node-name", default=None, help="Human-readable node name for config")
     init_parser.add_argument("--hermes-home", default=None, help="Hermes home path for config")
     init_parser.add_argument("--interval", type=int, default=None, help="Heartbeat interval in seconds for config")
