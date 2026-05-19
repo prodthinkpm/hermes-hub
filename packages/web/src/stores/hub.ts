@@ -233,6 +233,19 @@ export const useHubStore = defineStore('hub', () => {
     return { ok: true }
   }
 
+  async function createNode(name?: string): Promise<{ ok: boolean; error?: string; node?: HubNode; token?: string; command?: string }> {
+    const result = await api.createNode(name)
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to create node' }
+    await fetchProfiles()
+    return { ok: true, node: result.data.node, token: result.data.token, command: result.data.command }
+  }
+
+  async function fetchNodeToken(nodeId: string): Promise<{ token: string; command: string } | null> {
+    const result = await api.getNodeToken(nodeId)
+    if (!result.ok || !result.data) return null
+    return result.data
+  }
+
   async function fetchRegistrationToken(): Promise<void> {
     const result = await api.getRegistrationToken()
     if (result.ok && result.data) {
@@ -373,6 +386,8 @@ export const useHubStore = defineStore('hub', () => {
     fetchNode,
     updateNode,
     deleteNode,
+    createNode,
+    fetchNodeToken,
     fetchRegistrationToken,
     // Gateway
     startGateway,

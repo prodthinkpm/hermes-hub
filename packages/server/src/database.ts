@@ -34,6 +34,7 @@ export interface DbNodeRow {
   last_heartbeat_at: string | null
   profiles_total: number
   gateway_running: number
+  token?: string | null
   created_at: string
   updated_at: string
 }
@@ -238,6 +239,7 @@ function runMigrations(db: Database.Database): void {
       last_heartbeat_at TEXT,
       profiles_total    INTEGER NOT NULL DEFAULT 0,
       gateway_running   INTEGER NOT NULL DEFAULT 0,
+      token             TEXT,
       created_at        TEXT NOT NULL,
       updated_at        TEXT NOT NULL
     );
@@ -306,6 +308,13 @@ function runMigrations(db: Database.Database): void {
       created_at    TEXT NOT NULL
     );
   `)
+
+  // Phase 10: add token column to existing nodes table (safe if already exists)
+  try {
+    db.exec('ALTER TABLE nodes ADD COLUMN token TEXT')
+  } catch {
+    // Column already exists — ok
+  }
 
   // Seed the command counter if not present (restart-safe).
   db.prepare(
@@ -426,6 +435,49 @@ export function updateNodeFields(
   }
   upsertNode(db, merged)
   return merged
+}
+
+// -- Node creation with token (Phase 10) --
+
+export function createNodeRecord(
+  db: Database.Database,
+  id: string,
+  name: string,
+  token: string,
+): HubNode {
+  const timestamp = new Date().toISOString()
+  const node: HubNode = {
+    id,
+    name,
+    hostname: '',
+    os: '',
+    arch: '',
+    agentVersion: '',
+    hermesHome: '',
+    status: 'offline',
+    capabilities: [],
+    tags: [],
+    lastHeartbeatAt: undefined,
+    profilesTotal: 0,
+    gatewayRunning: 0,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
+  upsertNode(db, node)
+  // Store token separately (not in HubNode interface)
+  db.prepare('UPDATE nodes SET token = ? WHERE id = ?').run(token, id)
+  return node
+}
+
+export function getNodeByToken(db: Database.Database, token: string): { node: HubNode; token: string } | undefined {
+  const row = db.prepare('SELECT * FROM nodes WHERE token = ?').get(token) as DbNodeRow | undefined
+  if (!row?.token) return undefined
+  return { node: rowToNode(row), token: row.token }
+}
+
+export function getNodeToken(db: Database.Database, nodeId: string): string | undefined {
+  const row = db.prepare('SELECT token FROM nodes WHERE id = ?').get(nodeId) as { token: string | null } | undefined
+  return row?.token ?? undefined
 }
 
 // -- Metadata helpers (Phase 8) --

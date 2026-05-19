@@ -25,6 +25,9 @@ import {
   deleteAgentsForNode,
   deleteNode,
   updateNodeFields,
+  createNodeRecord,
+  getNodeByToken,
+  getNodeToken as dbGetNodeToken,
   getCommand,
   getAllCommands,
   upsertCommand,
@@ -57,8 +60,9 @@ export interface ServerOptions {
   registrationToken?: string  // 注册 token，未提供则自动生成
 }
 
-// Module-level registration token (set during startServer)
+// Module-level registration token and port (set during startServer)
 let resolvedToken: string | undefined
+let serverPort = 3000
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -120,7 +124,7 @@ function validateRegisterBody(body: unknown): HubAgentRegisterRequest | null {
   const runtime = body.runtime
   if (!isObject(runtime)) return null
   if (
-    typeof body.node_id !== 'string' ||
+    (body.node_id !== undefined && typeof body.node_id !== 'string') ||
     typeof body.hostname !== 'string' ||
     typeof body.agent_version !== 'string' ||
     typeof body.hermes_home !== 'string' ||
@@ -286,13 +290,15 @@ function auditCommand(db: Database.Database, command: HubCommand): void {
 // 根据注册请求构造 node 对象并写入数据库，保留已有节点的历史数据
 function upsertNode(
   db: Database.Database,
-  body: HubAgentRegisterRequest
+  body: HubAgentRegisterRequest,
+  overrideNodeId?: string,
 ): HubNode {
-  const existing = getNode(db, body.node_id)
+  const nodeId = overrideNodeId || body.node_id || 'unknown'
+  const existing = getNode(db, nodeId)
   const timestamp = nowIso()
   const node: HubNode = {
-    id: body.node_id,
-    name: body.name?.trim() || body.node_id,
+    id: nodeId,
+    name: body.name?.trim() || nodeId,
     hostname: body.hostname,
     os: body.runtime.os,
     arch: body.runtime.arch,
@@ -504,19 +510,76 @@ async function handleHubAgentApi(
       jsonReply(res, 400, { ok: false, error: 'Invalid register payload' })
       return true
     }
-    // Token 校验：若配置了 token，注册请求必须携带正确 token
-    if (resolvedToken && registerBody.token !== resolvedToken) {
-      jsonReply(res, 401, { ok: false, error: 'Invalid or missing registration token' })
+
+    // Phase 10: 优先按 per-node token 查找节点
+    if (registerBody.token) {
+      const found = getNodeByToken(db, registerBody.token)
+      if (found) {
+        // 更新节点信息（hostname/os/arch/agent_version 等由 agent 上报）
+        const timestamp = nowIso()
+        const updated: HubNode = {
+          ...found.node,
+          name: registerBody.name?.trim() || found.node.name,
+          hostname: registerBody.hostname,
+          os: registerBody.runtime.os,
+          arch: registerBody.runtime.arch,
+          agentVersion: registerBody.agent_version,
+          hermesVersion: registerBody.hermes_version || found.node.hermesVersion,
+          hermesHome: registerBody.hermes_home,
+          status: 'online',
+          capabilities: stringArrayFromFlags(registerBody.capabilities),
+          tags: registerBody.tags ?? found.node.tags,
+          updatedAt: timestamp,
+        }
+        dbUpsertNode(db, updated)
+        jsonReply(res, 200, {
+          ok: true,
+          node_id: updated.id,
+          server_time: timestamp,
+          poll_interval_seconds: 3,
+          heartbeat_interval_seconds: 10,
+        })
+        return true
+      }
+    }
+
+    // Fallback: 全局 token 兼容（旧行为）
+    if (resolvedToken && registerBody.token === resolvedToken) {
+      const nodeId = registerBody.node_id || `node-${randomBytes(4).toString('hex')}`
+      const existing = getNode(db, nodeId)
+      if (!existing) {
+        // Auto-create node with global token (backward compat)
+        createNodeRecord(db, nodeId, registerBody.name?.trim() || nodeId, registerBody.token)
+      }
+      const node = upsertNode(db, { ...registerBody, node_id: nodeId })
+      jsonReply(res, 200, {
+        ok: true,
+        node_id: node.id,
+        server_time: nowIso(),
+        poll_interval_seconds: 3,
+        heartbeat_interval_seconds: 10,
+      })
       return true
     }
-    const node = upsertNode(db, registerBody)
-    jsonReply(res, 200, {
-      ok: true,
-      node_id: node.id,
-      server_time: nowIso(),
-      poll_interval_seconds: 3,
-      heartbeat_interval_seconds: 10,
-    })
+
+    // Token 不匹配任何节点，也不是全局 token
+    const hasPerNodeToken = db.prepare('SELECT COUNT(*) AS count FROM nodes WHERE token IS NOT NULL').get() as { count: number }
+    if (hasPerNodeToken.count > 0) {
+      jsonReply(res, 401, { ok: false, error: 'Invalid token. Create this node from the web UI first.' })
+    } else if (resolvedToken) {
+      jsonReply(res, 401, { ok: false, error: 'Invalid or missing registration token' })
+    } else {
+      // No tokens configured at all — allow registration (dev mode)
+      const nodeId = registerBody.node_id || `node-${randomBytes(4).toString('hex')}`
+      const node = upsertNode(db, { ...registerBody, node_id: nodeId })
+      jsonReply(res, 200, {
+        ok: true,
+        node_id: node.id,
+        server_time: nowIso(),
+        poll_interval_seconds: 3,
+        heartbeat_interval_seconds: 10,
+      })
+    }
     return true
   }
 
@@ -796,11 +859,58 @@ async function handlePublicApi(
   }
 
   if (path === '/api/nodes' || path === '/api/nodes/') {
+    // GET /api/nodes — list all nodes
+    if (method === 'GET') {
+      jsonReply(res, 200, { ok: true, data: getAllNodes(db) })
+      return true
+    }
+    // POST /api/nodes — create node (admin only, Phase 10)
+    if (method === 'POST') {
+      if (userRole < 2) {
+        jsonReply(res, 403, { ok: false, error: 'Admin role required to create nodes' })
+        return true
+      }
+      let body: unknown
+      try { body = await readJsonBody(req) } catch {
+        jsonReply(res, 400, { ok: false, error: 'Invalid JSON body' })
+        return true
+      }
+      const nodeName = isObject(body) && typeof body.name === 'string' && body.name.trim()
+        ? body.name.trim()
+        : `node-${randomBytes(4).toString('hex')}`
+      const nodeId = `node-${randomBytes(4).toString('hex')}`
+      const nodeToken = randomUUID()
+      const node = createNodeRecord(db, nodeId, nodeName, nodeToken)
+      insertLog(db, 'info', `Node '${nodeId}' (${nodeName}) created via API with token`, 'hub')
+      const displayUrl = `http://localhost:${serverPort}`
+      const command = `hermes-hub-agent --hub-url=${displayUrl} --token=${nodeToken}`
+      jsonReply(res, 201, { ok: true, data: { node, token: nodeToken, command } })
+      return true
+    }
+    jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
+    return true
+  }
+
+  // Node token endpoint (admin only, Phase 10)
+  const nodeTokenMatch = path.match(/^\/api\/nodes\/([^/]+)\/token$/)
+  if (nodeTokenMatch) {
     if (method !== 'GET') {
       jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
       return true
     }
-    jsonReply(res, 200, { ok: true, data: getAllNodes(db) })
+    if (userRole < 2) {
+      jsonReply(res, 403, { ok: false, error: 'Admin role required to view node tokens' })
+      return true
+    }
+    const nodeId = decodeURIComponent(nodeTokenMatch[1])
+    const token = dbGetNodeToken(db, nodeId)
+    if (!token) {
+      jsonReply(res, 404, { ok: false, error: `Node '${nodeId}' not found or has no token` })
+      return true
+    }
+    const displayUrl = `http://localhost:${serverPort}`
+    const command = `hermes-hub-agent --hub-url=${displayUrl} --token=${token}`
+    jsonReply(res, 200, { ok: true, data: { token, command } })
     return true
   }
 
@@ -1246,6 +1356,8 @@ async function handleRequest(
 }
 
 export function startServer(opts: ServerOptions): ReturnType<typeof createServer> {
+  serverPort = opts.port
+
   // 初始化 SQLite 数据库，持久化 path 默认为 ~/.hermes-hub/hub.db
   const db = initDatabase(opts.dbPath)
 

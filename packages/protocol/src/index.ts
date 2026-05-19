@@ -57,7 +57,7 @@ export interface ManagedAgent {
 }
 
 export interface HubAgentRegisterRequest {
-  node_id: string
+  node_id?: string  // Phase 10: optional, token identifies the node
   name?: string
   hostname: string
   agent_version: string
@@ -183,4 +183,21 @@ export interface LoginResponse {
 export interface AuthStatusResponse {
   authenticated: boolean
   user?: HubUser
+}
+
+// -- Node creation types (Phase 10) --
+
+export interface CreateNodeRequest {
+  name?: string
+}
+
+export interface CreateNodeResponse {
+  node: HubNode
+  token: string
+  command: string
+}
+
+export interface NodeTokenResponse {
+  token: string
+  command: string
 }
