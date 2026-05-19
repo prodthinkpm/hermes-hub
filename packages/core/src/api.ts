@@ -282,23 +282,48 @@ export class HermesApiClient {
 
   // 轮询命令直到到达终态（success/failed/timeout/cancelled）
   async waitForCommand(id: string, maxWaitMs = 30_000): Promise<HermesApiResponse<HubCommand>> {
-    const deadline = Date.now() + maxWaitMs
-    let lastError: string | undefined
-    while (Date.now() < deadline) {
-      const result = await this.getCommand(id)
-      if (!result.ok || !result.data) {
-        lastError = result.error
-        await new Promise((resolve) => setTimeout(resolve, 1000))
-        continue
+    const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
+    const ws = new WebSocket(`${protocol}://${location.host}/ws`)
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        ws.close()
+        resolve({ ok: false, error: `Command '${id}' did not complete within ${maxWaitMs / 1000}s` })
+      }, maxWaitMs)
+
+      ws.onopen = () => {
+        // Fetch initial state in case command already completed before ws connected
+        this.getCommand(id).then((result) => {
+          if (result.ok && result.data) {
+            const cmd = result.data
+            if (cmd.status === 'success' || cmd.status === 'failed' || cmd.status === 'timeout' || cmd.status === 'cancelled') {
+              clearTimeout(timer)
+              ws.close()
+              resolve({ ok: true, data: cmd })
+            }
+          }
+        })
       }
-      const command = result.data
-      // 终态：success, failed, timeout, cancelled
-      if (command.status === 'success' || command.status === 'failed' || command.status === 'timeout' || command.status === 'cancelled') {
-        return { ok: true, data: command }
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data) as { event: string; command: HubCommand }
+          if (msg.event === 'command.updated' && msg.command?.id === id) {
+            const cmd = msg.command
+            if (cmd.status === 'success' || cmd.status === 'failed' || cmd.status === 'timeout' || cmd.status === 'cancelled') {
+              clearTimeout(timer)
+              ws.close()
+              resolve({ ok: true, data: cmd })
+            }
+          }
+        } catch { /* ignore malformed messages */ }
       }
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-    }
-    return { ok: false, error: lastError ?? `Command '${id}' did not complete within ${maxWaitMs / 1000}s` }
+
+      ws.onerror = () => {
+        clearTimeout(timer)
+        ws.close()
+        resolve({ ok: false, error: 'WebSocket connection failed' })
+      }
+    })
   }
 
   // Config — 通过 command queue 异步读取（Phase 6）

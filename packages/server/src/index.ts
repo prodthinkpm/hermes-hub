@@ -14,6 +14,7 @@ import type {
   ManagedAgent,
 } from '@hermes-hub/protocol'
 import type Database from 'better-sqlite3'
+import { handleUpgrade, wsBroadcast } from './websocket.js'
 import {
   initDatabase,
   getNode,
@@ -232,6 +233,7 @@ function createCommand(
     updatedAt: timestamp,
   }
   upsertCommand(db, command)
+  notifyCommandUpdated(command);
   // 高危操作写入审计日志
   auditCommand(db, command)
   return { ok: true, command }
@@ -332,6 +334,7 @@ function checkTimeouts(db: Database.Database, nodeId: string, timestamp: string)
       command.finishedAt = timestamp
       command.updatedAt = timestamp
       upsertCommand(db, command)
+      notifyCommandUpdated(command);
     }
   }
 }
@@ -521,6 +524,10 @@ function validateHubAgentVkey(db: Database.Database, nodeId: string, req: Incomi
 
 function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value
+}
+
+function notifyCommandUpdated(command: HubCommand): void {
+  wsBroadcast(JSON.stringify({ event: 'command.updated', command }))
 }
 
 function requestHubUrl(req: IncomingMessage): string {
@@ -745,6 +752,7 @@ async function handleHubAgentApi(
       nextCommand.dispatchedAt = timestamp
       nextCommand.updatedAt = timestamp
       upsertCommand(db, nextCommand)
+      notifyCommandUpdated(nextCommand);
     }
     jsonReply(res, 200, { ok: true, commands: nextCommand ? [nextCommand] : [] })
     return true
@@ -776,6 +784,7 @@ async function handleHubAgentApi(
     command.startedAt = timestamp
     command.updatedAt = timestamp
     upsertCommand(db, command)
+    notifyCommandUpdated(command);
     jsonReply(res, 200, { ok: true, data: command })
     return true
   }
@@ -824,6 +833,7 @@ async function handleHubAgentApi(
     command.finishedAt = resultBody.finished_at ?? timestamp
     command.updatedAt = timestamp
     upsertCommand(db, command)
+    notifyCommandUpdated(command);
     jsonReply(res, 200, { ok: true, data: command })
     return true
   }
@@ -1552,6 +1562,15 @@ export function startServer(opts: ServerOptions): ReturnType<typeof createServer
       return
     }
     console.error(`[hermes-hub] Server error: ${err.message}`)
+  })
+
+  // WebSocket upgrade (Phase 11 — command push)
+  server.on('upgrade', (req, socket, head) => {
+    if (req.url === '/ws') {
+      handleUpgrade(req, socket, head)
+    } else {
+      socket.destroy()
+    }
   })
 
   server.listen(opts.port, () => {
