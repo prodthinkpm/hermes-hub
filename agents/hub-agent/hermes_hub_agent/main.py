@@ -1,62 +1,11 @@
 from __future__ import annotations
 
 import argparse
-import os
-import platform
-import socket
 import sys
-import time
-from pathlib import Path
-from typing import Any
 
 from hermes_hub_agent import __version__
-from hermes_hub_agent.client import HubClient
-from hermes_hub_agent.commands import poll_commands
-from hermes_hub_agent.scanner import default_hermes_home, scan_profiles
-
-
-def is_docker_runtime() -> bool:
-    if os.path.exists("/.dockerenv"):
-        return True
-    try:
-        return "docker" in Path("/proc/1/cgroup").read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return False
-
-
-def build_register_payload(node_name: str, hermes_home: Path) -> dict[str, Any]:
-    tags = ["local"]
-    if is_docker_runtime():
-        tags.append("docker")
-    return {
-        "name": node_name,
-        "hostname": socket.gethostname(),
-        "agent_version": __version__,
-        "hermes_home": str(hermes_home),
-        "runtime": {
-            "os": platform.system().lower(),
-            "arch": platform.machine(),
-        },
-        "capabilities": {
-            "profiles": True,
-            "heartbeat": True,
-            "logs": False,
-            "commands": True,
-        },
-        "tags": tags,
-    }
-
-
-def build_heartbeat_payload(hermes_home: Path) -> dict[str, Any]:
-    profiles = scan_profiles(hermes_home)
-    return {
-        "status": "online",
-        "summary": {
-            "profiles_total": len(profiles),
-            "gateway_running": sum(1 for profile in profiles if profile.get("gateway_status") == "running"),
-        },
-        "profiles": profiles,
-    }
+from hermes_hub_agent.runtime import AgentRuntime
+from hermes_hub_agent.settings import AgentSettings
 
 
 def cmd_init(args: argparse.Namespace) -> None:
@@ -115,52 +64,10 @@ def cmd_service(args: argparse.Namespace) -> None:
 
 
 def cmd_run(args: argparse.Namespace) -> None:
-    """Run the agent loop with config file support."""
-    from hermes_hub_agent.config import load_config
-
-    config = load_config()
-
-    def _or(val: str | None, env: str, cfg: str, default: str) -> str:
-        return val or os.environ.get(env) or config.get(cfg) or default
-
-    hub_url = _or(args.hub_url, "HERMES_HUB_URL", "hub_url", "http://localhost:3000")
-    vkey = _or(args.vkey, "HERMES_HUB_VKEY", "vkey", "")
-    interval = int(config.get("heartbeat_interval") or os.environ.get("HERMES_HUB_HEARTBEAT_INTERVAL") or 10)
-
-    hermes_home = Path(os.environ.get("HERMES_HOME") or config.get("hermes_home") or str(default_hermes_home())).expanduser()
-    client = HubClient(hub_url, vkey=vkey)
-    try:
-        register_response = client.register(build_register_payload(socket.gethostname(), hermes_home))
-        node_id = register_response.get("node_id")
-        if not isinstance(node_id, str) or not node_id:
-            raise RuntimeError("Server did not return a node_id")
-        client.heartbeat(node_id, build_heartbeat_payload(hermes_home))
-        print(f"registered node '{node_id}' and scanned {hermes_home}")
-
-        if args.once:
-            return
-
-        while True:
-            time.sleep(max(interval, 1))
-            client.heartbeat(node_id, build_heartbeat_payload(hermes_home))
-            if poll_commands(client, node_id, hermes_home):
-                client.heartbeat(node_id, build_heartbeat_payload(hermes_home))
-    except RuntimeError as exc:
-        message = str(exc)
-        print(f"Hub Agent failed: {message}", file=sys.stderr)
-        if "401 Unauthorized" in message:
-            print(
-                "Hint: verify the vkey was copied from this Hub's Nodes page, "
-                "the Hub server was restarted with the latest build, and it is using the same hub.db.",
-                file=sys.stderr,
-            )
-            print(
-                "For per-node vkeys, use the generated command: hermes-hub-agent --hub-url=... --vkey=<vkey>",
-                file=sys.stderr,
-            )
-        raise SystemExit(1) from None
-    finally:
-        client.close()
+    """Run the agent runtime with config file and environment support."""
+    settings = AgentSettings.from_args(args)
+    runtime = AgentRuntime(settings)
+    runtime.run(once=args.once)
 
 
 def main() -> None:
