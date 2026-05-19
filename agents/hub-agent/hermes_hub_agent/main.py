@@ -122,29 +122,19 @@ def cmd_run(args: argparse.Namespace) -> None:
     """Run the agent loop with config file support."""
     from hermes_hub_agent.config import load_config
 
-    config = load_config(args.config) if args.config else load_config()
+    config = load_config()
 
-    def _resolve(cli_val: Any, env_key: str, config_key: str, default: Any) -> Any:
-        if cli_val is not None:
-            return cli_val
-        env_val = os.environ.get(env_key)
-        if env_val is not None:
-            return env_val
-        val = config.get(config_key)
-        if val is not None:
-            return val
-        return default
+    def _or(val: str | None, env: str, cfg: str, default: str) -> str:
+        return val or os.environ.get(env) or config.get(cfg) or default
 
-    hub_url = _resolve(args.hub_url, "HERMES_HUB_URL", "hub_url", "http://localhost:3000")
-    node_name = _resolve(args.node_name, "HERMES_NODE_NAME", "node_name", "local")
-    hermes_home_str = _resolve(args.hermes_home, "HERMES_HOME", "hermes_home", str(default_hermes_home()))
-    interval = int(_resolve(args.interval, "HERMES_HUB_HEARTBEAT_INTERVAL", "heartbeat_interval", 10))
-    vkey = _resolve(args.vkey, "HERMES_HUB_VKEY", "vkey", "")
+    hub_url = _or(args.hub_url, "HERMES_HUB_URL", "hub_url", "http://localhost:3000")
+    vkey = _or(args.vkey, "HERMES_HUB_VKEY", "vkey", "")
+    interval = int(config.get("heartbeat_interval") or os.environ.get("HERMES_HUB_HEARTBEAT_INTERVAL") or 10)
 
-    hermes_home = Path(hermes_home_str).expanduser()
+    hermes_home = Path(os.environ.get("HERMES_HOME") or config.get("hermes_home") or str(default_hermes_home())).expanduser()
     client = HubClient(hub_url, vkey=vkey)
     try:
-        register_response = client.register(build_register_payload(node_name, hermes_home))
+        register_response = client.register(build_register_payload(socket.gethostname(), hermes_home))
         node_id = register_response.get("node_id")
         if not isinstance(node_id, str) or not node_id:
             raise RuntimeError("Server did not return a node_id")
@@ -185,12 +175,8 @@ def main() -> None:
 
     run_parser = subparsers.add_parser("run", help="Run the agent loop (default)")
     run_parser.add_argument("--hub-url", default=None, help="Hub server URL")
-    run_parser.add_argument("--node-name", default=None, help="Human-readable node name")
-    run_parser.add_argument("--hermes-home", default=None, help="Path to Hermes home directory")
-    run_parser.add_argument("--interval", type=int, default=None, help="Heartbeat interval in seconds")
-    run_parser.add_argument("--once", action="store_true", help="Register and send one heartbeat, then exit")
-    run_parser.add_argument("--config", default=None, help="Path to config file")
     run_parser.add_argument("--vkey", default=None, help="Verification key (vkey) for the hub server")
+    run_parser.add_argument("--once", action="store_true", help=argparse.SUPPRESS)
 
     init_parser = subparsers.add_parser("init", help="Generate a configuration file")
     init_parser.add_argument("--hub-url", default=None, help="Hub server URL for config")
