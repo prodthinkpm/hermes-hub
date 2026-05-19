@@ -169,12 +169,12 @@ def cmd_run(args: argparse.Namespace) -> None:
         print(f"Hub Agent failed: {message}", file=sys.stderr)
         if "401 Unauthorized" in message:
             print(
-                "Hint: verify the token was copied from this Hub's Nodes page, "
+                "Hint: verify the vkey was copied from this Hub's Nodes page, "
                 "the Hub server was restarted with the latest build, and it is using the same hub.db.",
                 file=sys.stderr,
             )
             print(
-                "For per-node tokens, prefer the generated command that includes --node-id.",
+                "For per-node vkeys, use the generated command: hermes-hub-agent --hub-url=... --vkey=<vkey>",
                 file=sys.stderr,
             )
         raise SystemExit(1) from None
