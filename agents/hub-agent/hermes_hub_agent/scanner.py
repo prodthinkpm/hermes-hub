@@ -1,132 +1,151 @@
-"""Hermes profile discovery and summary extraction."""
-
 from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
-
-def default_hermes_home() -> Path:
-    configured = os.environ.get("HERMES_HOME")
-    if configured:
-        return Path(configured).expanduser()
-
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if local_app_data:
-        candidate = Path(local_app_data) / "hermes"
-        if candidate.exists():
-            return candidate
-
-    return Path.home() / ".hermes"
+from .hermes_imports import default_hermes_home
 
 
-def read_yaml_scalar(config_path: Path, key: str) -> str | None:
-    if not config_path.exists():
-        return None
-    try:
-        for line in config_path.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if not stripped.startswith(f"{key}:"):
+def discover_profiles(root_hermes_home: str | None = None) -> list[dict[str, Any]]:
+    """Discover default profile and named profiles.
+
+    Default profile:
+      HERMES_HOME
+
+    Named profiles:
+      HERMES_HOME/profiles/*
+    """
+    root = Path(root_hermes_home or os.environ.get("HERMES_HOME") or default_hermes_home()).expanduser()
+
+    profiles: list[dict[str, Any]] = [
+        {
+            "name": "default",
+            "home": str(root),
+            "is_default": True,
+        }
+    ]
+
+    profiles_dir = root / "profiles"
+    if profiles_dir.exists() and profiles_dir.is_dir():
+        for child in sorted(profiles_dir.iterdir(), key=lambda p: p.name.lower()):
+            if not child.is_dir():
                 continue
-            value = stripped.split(":", 1)[1].strip()
-            if value.startswith(("'", '"')) and value.endswith(("'", '"')):
-                value = value[1:-1]
-            return value or None
-    except OSError:
-        return None
-    return None
+            if child.name.startswith("."):
+                continue
+            profiles.append({
+                "name": child.name,
+                "home": str(child),
+                "is_default": False,
+            })
+
+    return profiles
 
 
-def read_nested_model(config_path: Path) -> tuple[str | None, str | None]:
-    if not config_path.exists():
-        return None, None
+def inspect_profile(profile_home: str, timeout: int = 30) -> dict[str, Any]:
+    """Run profile_inspector in a child process with isolated HERMES_HOME."""
+    env = os.environ.copy()
+    env["HERMES_HOME"] = profile_home
+    env["PYTHONIOENCODING"] = "utf-8"
+
+    result = subprocess.run(
+        [sys.executable, "-m", "hermes_hub_agent.profile_inspector"],
+        env=env,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        timeout=timeout,
+    )
+
+    if result.returncode != 0:
+        return {
+            "ok": False,
+            "profile_home": profile_home,
+            "error": result.stderr or result.stdout or f"Inspector exited with {result.returncode}",
+        }
+
+    stdout = (result.stdout or "").strip()
+    if not stdout:
+        return {
+            "ok": False,
+            "profile_home": profile_home,
+            "error": "Inspector returned empty stdout",
+            "stderr": result.stderr,
+        }
+
     try:
-        lines = config_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return None, None
+        return json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        return {
+            "ok": False,
+            "profile_home": profile_home,
+            "error": f"Inspector returned invalid JSON: {exc}",
+            "stdout": stdout,
+            "stderr": result.stderr,
+        }
 
-    provider: str | None = None
-    model: str | None = None
-    in_model = False
-    for line in lines:
-        stripped = line.strip()
-        if not in_model and stripped.startswith("model:") and stripped != "model:":
-            value = stripped.split(":", 1)[1].strip().strip("'\"")
-            return None, value or None
-        if stripped == "model:":
-            in_model = True
-            continue
-        if in_model and line and not line.startswith((" ", "\t")):
-            break
-        if stripped.startswith("provider:"):
-            provider = stripped.split(":", 1)[1].strip().strip("'\"") or None
-        if stripped.startswith("default:"):
-            model = stripped.split(":", 1)[1].strip().strip("'\"") or None
-    return provider, model
+def flatten_profile_snapshot(discovered: dict[str, Any], inspected: dict[str, Any]) -> dict[str, Any]:
+    profile = inspected.get("profile") if isinstance(inspected, dict) else None
+    if not isinstance(profile, dict):
+        profile = {}
 
+    gateway = profile.get("gateway") or {}
 
-def count_files(path: Path, suffixes: tuple[str, ...] | None = None) -> int:
-    if not path.exists() or not path.is_dir():
-        return 0
-    total = 0
-    for child in path.rglob("*"):
-        if not child.is_file():
-            continue
-        if suffixes and child.suffix.lower() not in suffixes:
-            continue
-        total += 1
-    return total
-
-
-def has_profile_marker(profile_home: Path) -> bool:
-    markers = ["config.yaml", ".env", "SOUL.md", "sessions", "logs", "skills"]
-    return any((profile_home / marker).exists() for marker in markers)
-
-
-def profile_summary(profile_name: str, profile_home: Path) -> dict[str, Any]:
-    config_path = profile_home / "config.yaml"
-    provider, model = read_nested_model(config_path)
-    setup_status = "ready" if config_path.exists() else "needs_setup"
-    gateway_state_path = profile_home / "gateway_state.json"
-    gateway_status = "stopped"
-    gateway_state = {}
-    if gateway_state_path.exists():
-        try:
-            gateway_state = json.loads(gateway_state_path.read_text(encoding="utf-8"))
-            raw_state = str(gateway_state.get("gateway_state", "")).lower()
-            gateway_status = "running" if raw_state == "running" else raw_state or "unknown"
-        except (OSError, json.JSONDecodeError):
-            gateway_status = "unknown"
-    print(gateway_state)
     return {
-        "profile_name": profile_name,
-        "profile_home": str(profile_home),
-        "provider": provider,
-        "model": model,
-        "terminal_cwd": read_yaml_scalar(config_path, "cwd"),
-        "setup_status": setup_status,
-        "gateway_status": gateway_status,
-        "gateway": gateway_state,
-        "api_server_status": "unknown",
-        "has_env": (profile_home / ".env").exists(),
-        "has_soul": (profile_home / "SOUL.md").exists(),
-        "sessions_count": count_files(profile_home / "sessions"),
-        "skills_count": count_files(profile_home / "skills", (".md",)),
-        "cron_count": count_files(profile_home / "cron"),
+        "profile_name": discovered["name"],
+        "profile_home": discovered["home"],
+        "is_default": bool(discovered.get("is_default")),
+        "ok": bool(inspected.get("ok")),
+        "error": inspected.get("error"),
+        "provider": profile.get("provider"),
+        "model": profile.get("model"),
+        "terminal_cwd": profile.get("terminal_cwd"),
+        "has_config": profile.get("has_config", False),
+        "has_env": profile.get("has_env", False),
+        "has_soul": profile.get("has_soul", False),
+        "env_status": profile.get("env_status") or {},
+        "gateway_status": derive_gateway_status(gateway),
+        "gateway": gateway,
+        "sessions_count": profile.get("sessions_count", 0),
+        "skills_count": profile.get("skills_count", 0),
+        "cron_count": profile.get("cron_count", 0),
+        "inspected_at": profile.get("inspected_at"),
+        "raw": inspected,
     }
 
 
-def scan_profiles(hermes_home: Path) -> list[dict[str, Any]]:
-    profiles: list[dict[str, Any]] = []
-    if hermes_home.exists() and has_profile_marker(hermes_home):
-        profiles.append(profile_summary("default", hermes_home))
+def scan_profiles(root_hermes_home: str | None = None) -> list[dict[str, Any]]:
+    """Scan all local Hermes profiles and return flattened snapshots."""
+    snapshots: list[dict[str, Any]] = []
 
-    profiles_dir = hermes_home / "profiles"
-    if profiles_dir.exists() and profiles_dir.is_dir():
-        for child in sorted(profiles_dir.iterdir(), key=lambda item: item.name.lower()):
-            if child.is_dir() and has_profile_marker(child):
-                profiles.append(profile_summary(child.name, child))
+    for discovered in discover_profiles(root_hermes_home):
+        inspected = inspect_profile(str(discovered["home"]))
+        snapshots.append(flatten_profile_snapshot(discovered, inspected))
 
-    return profiles
+    return snapshots
+
+
+def scan_all(root_hermes_home: str | None = None) -> list[dict[str, Any]]:
+    """Backward-compatible alias."""
+    return scan_profiles(root_hermes_home)
+
+
+def derive_gateway_status(gateway: Any) -> str:
+    if not isinstance(gateway, dict):
+        return "unknown"
+
+    runtime = gateway.get("runtime") or {}
+    if isinstance(runtime, dict):
+        state = runtime.get("gateway_state") or runtime.get("state") or runtime.get("status")
+        if state:
+            return str(state)
+
+    pid = gateway.get("pid")
+    if pid:
+        return "running"
+
+    return "stopped"

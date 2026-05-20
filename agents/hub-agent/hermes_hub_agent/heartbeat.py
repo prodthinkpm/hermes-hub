@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import platform
 import socket
@@ -118,12 +119,8 @@ def build_register_payload(config: AgentConfig) -> dict[str, Any]:
         "hermes_version": detect_hermes_version(config),
         "hermes_home": config.hermes_home,
         "runtime": {
-            "os": os.name,
-            "platform": sys.platform,
-            "system": platform.system(),
-            "release": platform.release(),
-            "machine": platform.machine(),
-            "python": sys.version.split()[0],
+            "os": platform.system().lower(),
+            "arch": platform.machine(),
         },
         "capabilities": {
             "profiles": True,
