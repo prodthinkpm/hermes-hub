@@ -23,6 +23,15 @@ const expandedNodeId = ref<string | null>(null)
 const nodeCommands = ref<Record<string, { vkey: string; command: string }>>({})
 const copiedNodeId = ref<string | null>(null)
 
+// Edit state
+const editingNodeId = ref<string | null>(null)
+const editName = ref('')
+const editSaving = ref(false)
+// Delete state
+const deletingNodeId = ref<string | null>(null)
+const deleteConfirmInput = ref('')
+const deleteSaving = ref(false)
+
 const nodeStats = computed<StatItem[]>(() => {
   const total = nodes.value.length
   const online = nodes.value.filter((n) => n.status === 'online').length
@@ -84,6 +93,54 @@ function copyCommand(command: string, nodeId: string) {
   void navigator.clipboard.writeText(command)
   copiedNodeId.value = nodeId
   setTimeout(() => { copiedNodeId.value = null }, 2000)
+}
+
+// Edit node name
+function startEdit(node: { id: string; name: string }) {
+  editingNodeId.value = node.id
+  editName.value = node.name
+}
+
+function cancelEdit() {
+  editingNodeId.value = null
+  editName.value = ''
+}
+
+async function saveEdit(nodeId: string) {
+  const name = editName.value.trim()
+  if (!name || editSaving.value) return
+  editSaving.value = true
+  const result = await hubStore.updateNode(nodeId, { name })
+  if (result.ok) {
+    editingNodeId.value = null
+  } else {
+    hubStore.showToast('Error', result.error ?? 'Failed to rename node')
+  }
+  editSaving.value = false
+}
+
+// Delete node
+function startDelete(nodeId: string) {
+  deletingNodeId.value = nodeId
+  deleteConfirmInput.value = ''
+}
+
+function cancelDelete() {
+  deletingNodeId.value = null
+  deleteConfirmInput.value = ''
+}
+
+async function confirmDelete(nodeId: string) {
+  if (deleteConfirmInput.value !== nodeId || deleteSaving.value) return
+  deleteSaving.value = true
+  const result = await hubStore.deleteNode(nodeId)
+  if (result.ok) {
+    hubStore.showToast('Deleted', 'Node removed')
+    deletingNodeId.value = null
+  } else {
+    hubStore.showToast('Error', result.error ?? 'Failed to delete node')
+  }
+  deleteSaving.value = false
 }
 
 onMounted(() => {
@@ -152,7 +209,7 @@ onMounted(() => {
       </div>
 
       <div v-else-if="nodes.length > 0" class="overflow-auto">
-        <table class="min-w-[960px] w-full border-collapse">
+        <table class="min-w-[1100px] w-full border-collapse">
           <thead>
             <tr class="bg-snow/[.035] text-left text-xs text-slate">
               <th class="border-b border-snow/10 w-10 px-[18px] py-[15px]"></th>
@@ -164,13 +221,12 @@ onMounted(() => {
               <th class="border-b border-snow/10 px-[18px] py-[15px]">Gateway</th>
               <th class="border-b border-snow/10 px-[18px] py-[15px]">Last Heartbeat</th>
               <th class="border-b border-snow/10 px-[18px] py-[15px]">Tags</th>
+              <th v-if="isAdmin()" class="border-b border-snow/10 px-[18px] py-[15px] w-[100px]">Actions</th>
             </tr>
           </thead>
           <tbody>
             <template v-for="node in nodes" :key="node.id">
-              <tr
-                class="cursor-pointer text-[13px] text-parchment transition hover:bg-snow/[.04]"
-              >
+              <tr class="text-[13px] text-parchment transition hover:bg-snow/[.04]">
                 <td class="border-b border-snow/10 px-[18px] py-[15px]">
                   <button
                     class="inline-flex size-6 items-center justify-center rounded text-slate transition hover:text-snow"
@@ -181,10 +237,20 @@ onMounted(() => {
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6" /></svg>
                   </button>
                 </td>
-                <td
-                  class="border-b border-snow/10 px-[18px] py-[15px] font-black text-snow hover:underline"
-                  @click="router.push('/nodes/' + node.id)"
-                >{{ node.name }}</td>
+                <td class="border-b border-snow/10 px-[18px] py-[15px] cursor-pointer hover:underline" @click="router.push('/nodes/' + node.id)">
+                  <template v-if="editingNodeId === node.id">
+                    <input
+                      v-model="editName"
+                      class="w-40 rounded border border-signal/40 bg-carbon px-2 py-0.5 text-[13px] font-bold text-snow outline-none"
+                      @keyup.enter="saveEdit(node.id)"
+                      @keyup.escape="cancelEdit()"
+                      @click.stop
+                    />
+                    <button class="ml-1 text-[11px] text-signal font-bold" :disabled="editSaving" @click.stop="saveEdit(node.id)">Save</button>
+                    <button class="ml-1 text-[11px] text-slate" @click.stop="cancelEdit()">Cancel</button>
+                  </template>
+                  <span v-else class="font-black text-snow">{{ node.name }}</span>
+                </td>
                 <td class="border-b border-snow/10 px-[18px] py-[15px]" @click="router.push('/nodes/' + node.id)">
                   <StatusBadge :tone="statusTone(node.status)">{{ node.status }}</StatusBadge>
                 </td>
@@ -201,10 +267,40 @@ onMounted(() => {
                   >{{ tag }}</span>
                   <span v-if="node.tags.length === 0" class="text-slate/50">—</span>
                 </td>
+                <td v-if="isAdmin()" class="border-b border-snow/10 px-[18px] py-[15px]">
+                  <div v-if="deletingNodeId === node.id" class="flex items-center gap-1">
+                    <input
+                      v-model="deleteConfirmInput"
+                      class="w-28 rounded border border-red/30 bg-carbon px-1.5 py-0.5 text-[11px] text-parchment outline-none"
+                      :placeholder="node.id.substring(0,8)"
+                      @keyup.escape="cancelDelete()"
+                      @click.stop
+                    />
+                    <button class="text-[11px] text-red font-bold" :disabled="deleteSaving" @click.stop="confirmDelete(node.id)">OK</button>
+                    <button class="text-[11px] text-slate" @click.stop="cancelDelete()">X</button>
+                  </div>
+                  <div v-else class="flex items-center gap-2">
+                    <button
+                      class="text-[12px] text-slate hover:text-signal transition"
+                      title="Edit name"
+                      @click.stop="startEdit(node)"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    </button>
+                    <button
+                      v-if="node.status !== 'online'"
+                      class="text-[12px] text-slate hover:text-red transition"
+                      title="Delete node"
+                      @click.stop="startDelete(node.id)"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                    </button>
+                  </div>
+                </td>
               </tr>
               <!-- Expandable command row -->
               <tr v-if="expandedNodeId === node.id && isAdmin()" class="bg-signal/[.03]">
-                <td colspan="9" class="border-b border-snow/10 px-[18px] py-4">
+                <td :colspan="isAdmin() ? 10 : 9" class="border-b border-snow/10 px-[18px] py-4">
                   <div v-if="nodeCommands[node.id]" class="flex items-center gap-3">
                     <code class="flex-1 rounded-md bg-carbon px-3 py-2 text-[12px] text-parchment font-mono break-all">{{ nodeCommands[node.id].command }}</code>
                     <button
