@@ -339,6 +339,18 @@ function checkTimeouts(db: Database.Database, nodeId: string, timestamp: string)
   }
 }
 
+// 检查所有节点心跳超时（30s 无心跳 → offline）
+function markStaleNodesOffline(db: Database.Database, timestamp: string): void {
+  const now = new Date(timestamp).getTime()
+  const nodes = getAllNodes(db)
+  for (const node of nodes) {
+    if (node.status !== 'online' || !node.lastHeartbeatAt) continue
+    if (now - new Date(node.lastHeartbeatAt).getTime() > 30_000) {
+      updateNodeFields(db, node.id, { status: 'offline' })
+    }
+  }
+}
+
 // 心跳处理：更新 agents 表，清理已从磁盘消失的 profile
 function upsertAgentsFromHeartbeat(
   db: Database.Database,
@@ -909,8 +921,9 @@ async function handleHubAgentApi(
   node.updatedAt = timestamp
   dbUpsertNode(db, node)
   upsertAgentsFromHeartbeat(db, nodeId, heartbeatBody)
-  // 检查该 node 上所有 running 命令是否超时
   checkTimeouts(db, nodeId, timestamp)
+  // 检查所有节点心跳超时（30s 无心跳 → offline）
+  markStaleNodesOffline(db, timestamp)
 
   jsonReply(res, 200, { ok: true, data: null })
   return true
@@ -1063,6 +1076,7 @@ async function handlePublicApi(
   if (path === '/api/nodes' || path === '/api/nodes/') {
     // GET /api/nodes — list all nodes
     if (method === 'GET') {
+      markStaleNodesOffline(db, nowIso())
       jsonReply(res, 200, { ok: true, data: getAllNodes(db) })
       return true
     }
