@@ -109,8 +109,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
 
-    # Default command for service-style startup.
-    if len(sys.argv) == 1:
+    # Default to daemon if no subcommand given
+    subcommands = {"scan", "heartbeat-once", "register", "daemon", "-h", "--help"}
+    if not subcommands.intersection(sys.argv[1:]):
         sys.argv.append("daemon")
 
     args = parser.parse_args()
