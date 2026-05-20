@@ -5,13 +5,13 @@ export type AgentApiStatus = 'unknown' | 'enabled' | 'disabled' | 'failed'
 export type CommandStatus = 'pending' | 'dispatched' | 'running' | 'success' | 'failed' | 'timeout' | 'cancelled'
 export type CommandType =
   | 'profile.scan' | 'profile.create' | 'profile.rename' | 'profile.delete'
-  | 'gateway.start' | 'gateway.stop' | 'gateway.restart'
+  | 'gateway.start' | 'gateway.stop' | 'gateway.restart' | 'gateway.status'
   | 'doctor.run' | 'setup.run'
   | 'logs.tail'
   | 'config.read' | 'config.patch'
   | 'soul.read' | 'soul.update'
   | 'env.status' | 'env.set' | 'env.delete'
-  | 'skills.list'
+  | 'skills.list' | 'sessions.list'
 
 export interface HubNode {
   id: string
