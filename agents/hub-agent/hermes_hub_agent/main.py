@@ -16,18 +16,27 @@ def print_json(data: Any) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2, default=str))
 
 
-def cmd_scan(args: argparse.Namespace) -> None:
+def _make_config(args: argparse.Namespace) -> AgentConfig:
     config = AgentConfig.from_env()
+    if args.hub_url:
+        config.hub_url = args.hub_url
+    if args.vkey:
+        config.hub_token = args.vkey
+    return config
+
+
+def cmd_scan(args: argparse.Namespace) -> None:
+    config = _make_config(args)
     print_json({"ok": True, "profiles": scan_profiles(config.hermes_home)})
 
 
 def cmd_heartbeat_once(args: argparse.Namespace) -> None:
-    config = AgentConfig.from_env()
+    config = _make_config(args)
     print_json(build_heartbeat_payload(config))
 
 
 def cmd_register(args: argparse.Namespace) -> None:
-    config = AgentConfig.from_env()
+    config = _make_config(args)
 
     if args.dry_run:
         print_json(build_register_payload(config))
@@ -37,7 +46,6 @@ def cmd_register(args: argparse.Namespace) -> None:
     try:
         response = client.register(build_register_payload(config))
         print_json(response)
-        # 捕获 server 返回的 node_id
         if isinstance(response.get("node_id"), str):
             print(f"[hub-agent] registered as node_id={response['node_id']}")
     finally:
@@ -45,7 +53,7 @@ def cmd_register(args: argparse.Namespace) -> None:
 
 
 def cmd_daemon(args: argparse.Namespace) -> None:
-    config = AgentConfig.from_env()
+    config = _make_config(args)
 
     if not args.no_register:
         client = HubClient(config)
@@ -77,6 +85,8 @@ def cmd_daemon(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="hermes-hub-agent")
+    parser.add_argument("--hub-url", default=None, help="Hub server URL")
+    parser.add_argument("--vkey", default=None, help="Verification key from Hub Nodes page")
     sub = parser.add_subparsers(dest="command", required=True)
 
     scan = sub.add_parser("scan", help="Scan local Hermes profiles and print snapshots")
