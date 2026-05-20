@@ -21,7 +21,7 @@ Hermes Profile = 被管理的 Agent 实例
 ## 功能特性
 
 - **Agent Fleet 总览** — 统一表格展示所有节点上的 Agent，按节点过滤
-- **Web 端节点创建** — 在 Nodes 页面创建节点，自动生成 vkey + 可复制命令
+- **Web 端节点管理** — 创建/重命名/删除节点，自动生成 vkey + copy-paste 命令，30s 无心跳自动离线
 - **Profile 生命周期** — 创建/重命名/删除 Agent，全部走异步 Command Queue
 - **Gateway 控制** — 启动/停止/重启单个或批量 Gateway
 - **Setup / Doctor** — 通过 Web 触发 `hermes setup` 和 `hermes doctor`
@@ -117,17 +117,13 @@ hermes-hub-agent --hub-url=http://localhost:3000 --vkey=abc123
 ### 子命令
 
 ```bash
-hermes-hub-agent init                               # 生成配置文件
-hermes-hub-agent service install|start|stop|status  # 系统服务管理
+hermes-hub-agent daemon              # 默认：心跳 + 命令轮询
+hermes-hub-agent register            # 注册 + 打印返回的 node_id
+hermes-hub-agent scan                # 扫描本地 Hermes profiles
+hermes-hub-agent heartbeat-once      # 构建一次心跳 payload（调试）
 ```
 
-配置文件（自动检测，无需手动指定）：
-
-| 平台 | 路径 |
-|------|------|
-| Linux | `~/.config/hermes-hub-agent/config.yaml` |
-| macOS | `~/Library/Application Support/hermes-hub-agent/config.yaml` |
-| Windows | `%LOCALAPPDATA%\hermes-hub-agent\config.yaml` |
+默认命令为 `daemon`，无参数启动等同 `hermes-hub-agent daemon`。
 
 ### 分发
 
@@ -147,8 +143,8 @@ ssh user@server "pip install /tmp/hermes_hub_agent-*.whl"
 | Dashboard | `/` | 概览统计 + 快速操作 |
 | Agents | `/profiles` | Agent 列表、创建、重命名、删除、按节点过滤 |
 | Agent 详情 | `/profiles/:id` | Config / SOUL / Skills / Env 编辑 |
-| Nodes | `/nodes` | 节点列表、新建节点、复制连接命令 |
-| Node 详情 | `/nodes/:id` | 节点信息、启用/禁用/删除 |
+| Nodes | `/nodes` | 节点列表、新建/重命名/删除、复制连接命令 |
+| Node 详情 | `/nodes/:id` | 节点详细信息（只读） |
 | Gateway | `/services` | 单/批量 Gateway 启停 |
 | Logs | `/logs` | 全局日志 + 按 Agent 过滤 |
 | Settings | `/settings` | 扫描路径 |
@@ -236,14 +232,13 @@ hermes-hub/
 │       ├── pyproject.toml
 │       ├── Dockerfile
 │       └── hermes_hub_agent/
-│           ├── main.py       #   CLI 入口（run/init/service）
-│           ├── client.py     #   HTTP 客户端
-│           ├── commands.py   #   命令调度（dispatch table）
-│           ├── scanner.py    #   Profile 发现与摘要
-│           ├── files.py      #   文件操作（config/SOUL/env）
-│           ├── hermes.py     #   Hermes CLI 调用封装
-│           ├── config.py     #   配置文件生成与加载
-│           └── service.py    #   系统服务管理
+│           ├── main.py         #   CLI 入口（scan/heartbeat-once/register/daemon）
+│           ├── hub_client.py   #   HTTP 客户端
+│           ├── command_runner.py # 命令轮询 + 执行
+│           ├── heartbeat.py    #   注册 + 心跳
+│           ├── scanner.py      #   Profile 发现与摘要
+│           ├── profile_inspector.py # Profile 元数据检查
+│           └── hermes_imports.py # Hermes 路径检测
 ├── docker-compose.yml
 ├── Dockerfile.server
 └── docs/
