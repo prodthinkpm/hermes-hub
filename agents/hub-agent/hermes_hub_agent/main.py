@@ -1,206 +1,121 @@
 from __future__ import annotations
 
 import argparse
-import os
-import platform
-import socket
+import json
 import sys
-import time
-from pathlib import Path
+import threading
 from typing import Any
 
-from hermes_hub_agent import __version__
-from hermes_hub_agent.client import HubClient
-from hermes_hub_agent.commands import poll_commands
-from hermes_hub_agent.scanner import default_hermes_home, scan_profiles
+from .command_runner import CommandRunner
+from .heartbeat import AgentConfig, build_heartbeat_payload, build_register_payload, heartbeat_loop
+from .hub_client import HubClient
+from .scanner import scan_profiles
 
 
-def is_docker_runtime() -> bool:
-    if os.path.exists("/.dockerenv"):
-        return True
+def print_json(data: Any) -> None:
+    print(json.dumps(data, ensure_ascii=False, indent=2, default=str))
+
+
+def _make_config(args: argparse.Namespace) -> AgentConfig:
+    config = AgentConfig.from_env()
+    if args.hub_url:
+        config.hub_url = args.hub_url
+    if args.vkey:
+        config.hub_token = args.vkey
+    return config
+
+
+def cmd_scan(args: argparse.Namespace) -> None:
+    config = _make_config(args)
+    print_json({"ok": True, "profiles": scan_profiles(config.hermes_home)})
+
+
+def cmd_heartbeat_once(args: argparse.Namespace) -> None:
+    config = _make_config(args)
+    print_json(build_heartbeat_payload(config))
+
+
+def cmd_register(args: argparse.Namespace) -> None:
+    config = _make_config(args)
+
+    if args.dry_run:
+        print_json(build_register_payload(config))
+        return
+
+    client = HubClient(config)
     try:
-        return "docker" in Path("/proc/1/cgroup").read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return False
-
-
-def build_register_payload(node_name: str, hermes_home: Path) -> dict[str, Any]:
-    tags = ["local"]
-    if is_docker_runtime():
-        tags.append("docker")
-    return {
-        "name": node_name,
-        "hostname": socket.gethostname(),
-        "agent_version": __version__,
-        "hermes_home": str(hermes_home),
-        "runtime": {
-            "os": platform.system().lower(),
-            "arch": platform.machine(),
-        },
-        "capabilities": {
-            "profiles": True,
-            "heartbeat": True,
-            "logs": False,
-            "commands": True,
-        },
-        "tags": tags,
-    }
-
-
-def build_heartbeat_payload(hermes_home: Path) -> dict[str, Any]:
-    profiles = scan_profiles(hermes_home)
-    return {
-        "status": "online",
-        "summary": {
-            "profiles_total": len(profiles),
-            "gateway_running": sum(1 for profile in profiles if profile.get("gateway_status") == "running"),
-        },
-        "profiles": profiles,
-    }
-
-
-def cmd_init(args: argparse.Namespace) -> None:
-    """Generate a configuration file at the platform-standard path."""
-    from hermes_hub_agent.config import (
-        DEFAULT_HEARTBEAT_INTERVAL,
-        DEFAULT_HERMES_HOME,
-        DEFAULT_HUB_URL,
-        DEFAULT_VKEY,
-        write_config,
-    )
-
-    hub_url = args.hub_url or DEFAULT_HUB_URL
-    hermes_home = args.hermes_home or DEFAULT_HERMES_HOME
-    heartbeat_interval = args.interval or DEFAULT_HEARTBEAT_INTERVAL
-    vkey = args.vkey or DEFAULT_VKEY
-
-    config_file = write_config(
-        hub_url=hub_url,
-        hermes_home=hermes_home,
-        heartbeat_interval=heartbeat_interval,
-        vkey=vkey,
-    )
-    print(f"Configuration written to {config_file}")
-    print(f"  hub_url: {hub_url}")
-    print(f"  hermes_home: {hermes_home}")
-    print(f"  heartbeat_interval: {heartbeat_interval}")
-    if vkey:
-        print(f"  vkey: {vkey}")
-
-
-def cmd_service(args: argparse.Namespace) -> None:
-    """Manage the agent system service."""
-    from hermes_hub_agent.service import (
-        install_service,
-        start_service,
-        status_service,
-        stop_service,
-        uninstall_service,
-    )
-
-    action = args.service_action
-    if action == "install":
-        install_service()
-    elif action == "start":
-        start_service()
-    elif action == "stop":
-        stop_service()
-    elif action == "uninstall":
-        uninstall_service()
-    elif action == "status":
-        status_service()
-    else:
-        print(f"Unknown service action: {action}. Use install/start/stop/uninstall/status.")
-        raise SystemExit(1)
-
-
-def cmd_run(args: argparse.Namespace) -> None:
-    """Run the agent loop with config file support."""
-    from hermes_hub_agent.config import load_config
-
-    config = load_config()
-
-    def _or(val: str | None, env: str, cfg: str, default: str) -> str:
-        return val or os.environ.get(env) or config.get(cfg) or default
-
-    hub_url = _or(args.hub_url, "HERMES_HUB_URL", "hub_url", "http://localhost:3000")
-    vkey = _or(args.vkey, "HERMES_HUB_VKEY", "vkey", "")
-    interval = int(config.get("heartbeat_interval") or os.environ.get("HERMES_HUB_HEARTBEAT_INTERVAL") or 10)
-
-    hermes_home = Path(os.environ.get("HERMES_HOME") or config.get("hermes_home") or str(default_hermes_home())).expanduser()
-    client = HubClient(hub_url, vkey=vkey)
-    try:
-        register_response = client.register(build_register_payload(socket.gethostname(), hermes_home))
-        node_id = register_response.get("node_id")
-        if not isinstance(node_id, str) or not node_id:
-            raise RuntimeError("Server did not return a node_id")
-        client.heartbeat(node_id, build_heartbeat_payload(hermes_home))
-        print(f"registered node '{node_id}' and scanned {hermes_home}")
-
-        if args.once:
-            return
-
-        while True:
-            time.sleep(max(interval, 1))
-            client.heartbeat(node_id, build_heartbeat_payload(hermes_home))
-            if poll_commands(client, node_id, hermes_home):
-                client.heartbeat(node_id, build_heartbeat_payload(hermes_home))
-    except RuntimeError as exc:
-        message = str(exc)
-        print(f"Hub Agent failed: {message}", file=sys.stderr)
-        if "401 Unauthorized" in message:
-            print(
-                "Hint: verify the vkey was copied from this Hub's Nodes page, "
-                "the Hub server was restarted with the latest build, and it is using the same hub.db.",
-                file=sys.stderr,
-            )
-            print(
-                "For per-node vkeys, use the generated command: hermes-hub-agent --hub-url=... --vkey=<vkey>",
-                file=sys.stderr,
-            )
-        raise SystemExit(1) from None
+        response = client.register(build_register_payload(config))
+        print_json(response)
+        if isinstance(response.get("node_id"), str):
+            print(f"[hub-agent] registered as node_id={response['node_id']}")
     finally:
         client.close()
 
 
+def cmd_daemon(args: argparse.Namespace) -> None:
+    config = _make_config(args)
+
+    if not args.no_register:
+        client = HubClient(config)
+        try:
+            response = client.register(build_register_payload(config))
+            print_json(response)
+            # 捕获 server 返回的 node_id，用于后续心跳和命令轮询
+            node_id = response.get("node_id")
+            if isinstance(node_id, str) and node_id:
+                config.node_id = node_id
+                print(f"[hub-agent] registered as node_id={node_id}")
+        finally:
+            client.close()
+
+    command_runner = CommandRunner(config)
+
+    command_thread = threading.Thread(
+        target=command_runner.loop,
+        name="command-runner",
+        daemon=True,
+    )
+    command_thread.start()
+
+    try:
+        heartbeat_loop(config)
+    finally:
+        command_runner.close()
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="hermes-hub-agent")
+    parser.add_argument("--hub-url", default=None, help="Hub server URL")
+    parser.add_argument("--vkey", default=None, help="Verification key from Hub Nodes page")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    scan = sub.add_parser("scan", help="Scan local Hermes profiles and print snapshots")
+    scan.set_defaults(func=cmd_scan)
+
+    hb = sub.add_parser("heartbeat-once", help="Build a heartbeat payload and print it")
+    hb.set_defaults(func=cmd_heartbeat_once)
+
+    register = sub.add_parser("register", help="Register this node with Hermes Hub")
+    register.add_argument("--dry-run", action="store_true", help="Only print registration payload")
+    register.set_defaults(func=cmd_register)
+
+    daemon = sub.add_parser("daemon", help="Run heartbeat and command polling loops")
+    daemon.add_argument("--no-register", action="store_true", help="Skip initial register request")
+    daemon.set_defaults(func=cmd_daemon)
+
+    return parser
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Hermes Hub Agent")
-    parser.add_argument("--version", action="version", version=f"hermes-hub-agent {__version__}")
+    parser = build_parser()
 
-    subparsers = parser.add_subparsers(dest="command", title="commands")
-
-    run_parser = subparsers.add_parser("run", help="Run the agent loop (default)")
-    run_parser.add_argument("--hub-url", default=None, help="Hub server URL")
-    run_parser.add_argument("--vkey", default=None, help="Verification key (vkey) for the hub server")
-    run_parser.add_argument("--once", action="store_true", help=argparse.SUPPRESS)
-
-    init_parser = subparsers.add_parser("init", help="Generate a configuration file")
-    init_parser.add_argument("--hub-url", default=None, help="Hub server URL for config")
-    init_parser.add_argument("--hermes-home", default=None, help="Hermes home path for config")
-    init_parser.add_argument("--interval", type=int, default=None, help="Heartbeat interval in seconds for config")
-    init_parser.add_argument("--vkey", default=None, help="Verification key (vkey) for the hub server")
-
-    service_parser = subparsers.add_parser("service", help="Manage the agent system service")
-    service_subs = service_parser.add_subparsers(dest="service_action", title="actions")
-    service_subs.add_parser("install", help="Install as system service")
-    service_subs.add_parser("start", help="Start the service")
-    service_subs.add_parser("stop", help="Stop the service")
-    service_subs.add_parser("uninstall", help="Uninstall the service")
-    service_subs.add_parser("status", help="Show service status")
-
-    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help", "--version"):
-        pass
-    elif len(sys.argv) == 1 or sys.argv[1] not in ("run", "init", "service"):
-        sys.argv.insert(1, "run")
+    # Default to daemon if no subcommand given
+    subcommands = {"scan", "heartbeat-once", "register", "daemon", "-h", "--help"}
+    if not subcommands.intersection(sys.argv[1:]):
+        sys.argv.append("daemon")
 
     args = parser.parse_args()
-
-    if args.command == "init":
-        cmd_init(args)
-    elif args.command == "service":
-        cmd_service(args)
-    else:
-        cmd_run(args)
+    args.func(args)
 
 
 if __name__ == "__main__":

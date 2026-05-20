@@ -146,13 +146,13 @@ function validateHeartbeatBody(body: unknown): HubAgentHeartbeatRequest | null {
 function isCommandType(value: unknown): value is CommandType {
   return (
     value === 'profile.scan' || value === 'profile.create' || value === 'profile.rename' || value === 'profile.delete' ||
-    value === 'gateway.start' || value === 'gateway.stop' || value === 'gateway.restart' ||
+    value === 'gateway.start' || value === 'gateway.stop' || value === 'gateway.restart' || value === 'gateway.status' ||
     value === 'doctor.run' || value === 'setup.run' ||
     value === 'logs.tail' ||
     value === 'config.read' || value === 'config.patch' ||
     value === 'soul.read' || value === 'soul.update' ||
     value === 'env.status' || value === 'env.set' || value === 'env.delete' ||
-    value === 'skills.list'
+    value === 'skills.list' || value === 'sessions.list'
   )
 }
 
@@ -339,6 +339,18 @@ function checkTimeouts(db: Database.Database, nodeId: string, timestamp: string)
   }
 }
 
+// 检查所有节点心跳超时（30s 无心跳 → offline）
+function markStaleNodesOffline(db: Database.Database, timestamp: string): void {
+  const now = new Date(timestamp).getTime()
+  const nodes = getAllNodes(db)
+  for (const node of nodes) {
+    if (node.status !== 'online' || !node.lastHeartbeatAt) continue
+    if (now - new Date(node.lastHeartbeatAt).getTime() > 30_000) {
+      updateNodeFields(db, node.id, { status: 'offline' })
+    }
+  }
+}
+
 // 心跳处理：更新 agents 表，清理已从磁盘消失的 profile
 function upsertAgentsFromHeartbeat(
   db: Database.Database,
@@ -372,7 +384,7 @@ function upsertAgentsFromHeartbeat(
       hasEnv: profile.has_env ?? false,
       hasSoul: profile.has_soul ?? false,
       lastSeenAt: timestamp,
-      lastError: profile.last_error,
+      lastError: (profile as any).error || profile.last_error,
       createdAt: existing?.createdAt ?? timestamp,
       updatedAt: timestamp,
     }
@@ -838,6 +850,37 @@ async function handleHubAgentApi(
     return true
   }
 
+  // Agent log upload (Phase 3)
+  const agentLogsMatch = path.match(/^\/api\/hub-agents\/([^/]+)\/logs$/)
+  if (agentLogsMatch) {
+    if (method !== 'POST') {
+      jsonReply(res, 405, { ok: false, error: 'Method not allowed' })
+      return true
+    }
+    const nodeId = decodeURIComponent(agentLogsMatch[1])
+    if (!getNode(db, nodeId)) {
+      jsonReply(res, 404, { ok: false, error: `Node '${nodeId}' is not registered` })
+      return true
+    }
+    if (!validateHubAgentVkey(db, nodeId, req)) {
+      jsonReply(res, 401, { ok: false, error: 'Invalid hub agent token' })
+      return true
+    }
+    let body: unknown
+    try { body = await readJsonBody(req) } catch {
+      jsonReply(res, 400, { ok: false, error: 'Invalid JSON body' })
+      return true
+    }
+    if (isObject(body) && typeof body.message === 'string') {
+      const level = typeof body.level === 'string' ? body.level : 'info'
+      insertLog(db, level, body.message, `node:${nodeId}`)
+      jsonReply(res, 200, { ok: true })
+    } else {
+      jsonReply(res, 400, { ok: false, error: 'Request body must contain message (string)' })
+    }
+    return true
+  }
+
   const heartbeatMatch = path.match(/^\/api\/hub-agents\/([^/]+)\/heartbeat$/)
   if (!heartbeatMatch) return false
   if (method !== 'POST') {
@@ -878,8 +921,9 @@ async function handleHubAgentApi(
   node.updatedAt = timestamp
   dbUpsertNode(db, node)
   upsertAgentsFromHeartbeat(db, nodeId, heartbeatBody)
-  // 检查该 node 上所有 running 命令是否超时
   checkTimeouts(db, nodeId, timestamp)
+  // 检查所有节点心跳超时（30s 无心跳 → offline）
+  markStaleNodesOffline(db, timestamp)
 
   jsonReply(res, 200, { ok: true, data: null })
   return true
@@ -1032,6 +1076,7 @@ async function handlePublicApi(
   if (path === '/api/nodes' || path === '/api/nodes/') {
     // GET /api/nodes — list all nodes
     if (method === 'GET') {
+      markStaleNodesOffline(db, nowIso())
       jsonReply(res, 200, { ok: true, data: getAllNodes(db) })
       return true
     }
@@ -1552,6 +1597,11 @@ export function startServer(opts: ServerOptions): ReturnType<typeof createServer
   }
 
   const server = createServer((req, res) => {
+    const start = Date.now()
+    res.on('finish', () => {
+      const ms = Date.now() - start
+      console.log(`[hermes-hub] ${req.method} ${req.url} → ${res.statusCode} (${ms}ms)`)
+    })
     void handleRequest(req, res, opts, db)
   })
 

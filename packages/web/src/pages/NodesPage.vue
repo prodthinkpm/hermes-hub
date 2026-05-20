@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/auth'
 import StatusBadge from '@/components/ui/StatusBadge.vue'
 import SectionTitle from '@/components/ui/SectionTitle.vue'
 import StatCard from '@/components/ui/StatCard.vue'
+import UiButton from '@/components/ui/UiButton.vue'
 import type { StatItem } from '@/types/hub'
 import type { BadgeTone } from '@hermes-hub/core'
 
@@ -22,6 +23,16 @@ const createError = ref('')
 const expandedNodeId = ref<string | null>(null)
 const nodeCommands = ref<Record<string, { vkey: string; command: string }>>({})
 const copiedNodeId = ref<string | null>(null)
+
+// Rename dialog
+const renameDialogOpen = ref(false)
+const renameDialogNodeId = ref<string | null>(null)
+const renameDialogName = ref('')
+const renameDialogError = ref('')
+const renameBusy = ref(false)
+
+// Delete
+const deleteBusyId = ref<string | null>(null)
 
 const nodeStats = computed<StatItem[]>(() => {
   const total = nodes.value.length
@@ -86,6 +97,51 @@ function copyCommand(command: string, nodeId: string) {
   setTimeout(() => { copiedNodeId.value = null }, 2000)
 }
 
+// Rename
+function openRenameDialog(nodeId: string, name: string) {
+  renameDialogNodeId.value = nodeId
+  renameDialogName.value = name
+  renameDialogError.value = ''
+  renameDialogOpen.value = true
+}
+
+function closeRenameDialog() {
+  renameDialogOpen.value = false
+  renameDialogNodeId.value = null
+  renameDialogName.value = ''
+}
+
+async function submitRename() {
+  const name = renameDialogName.value.trim()
+  if (!name || !renameDialogNodeId.value || renameBusy.value) return
+  renameBusy.value = true
+  renameDialogError.value = ''
+  const result = await hubStore.updateNode(renameDialogNodeId.value, { name })
+  if (result.ok) {
+    closeRenameDialog()
+  } else {
+    renameDialogError.value = result.error ?? 'Failed to rename node'
+  }
+  renameBusy.value = false
+}
+
+// Delete
+async function deleteNode(nodeId: string, nodeName: string) {
+  const firstConfirm = window.confirm(`Delete node "${nodeName}"? This will remove all its agents.`)
+  if (!firstConfirm) return
+  const secondInput = window.prompt(`Type "${nodeName}" to confirm deletion:`)
+  if (secondInput !== nodeName) return
+
+  deleteBusyId.value = nodeId
+  const result = await hubStore.deleteNode(nodeId)
+  if (result.ok) {
+    hubStore.showToast('Deleted', `Node "${nodeName}" removed.`)
+  } else {
+    hubStore.showToast('Error', result.error ?? 'Failed to delete node')
+  }
+  deleteBusyId.value = null
+}
+
 onMounted(() => {
   void hubStore.fetchProfiles()
 })
@@ -108,13 +164,13 @@ onMounted(() => {
           <h3 class="m-0 text-base font-extrabold text-snow">All Nodes</h3>
           <p class="mt-1 text-xs text-slate">Click a node to view details. Click the arrow to show connection command.</p>
         </div>
-        <button
+        <UiButton
           v-if="isAdmin() && !showCreateForm"
-          class="rounded-md border border-signal/30 bg-signal/10 px-3 py-1.5 text-[13px] font-bold text-signal transition hover:bg-signal/20"
+          variant="primary"
           @click="showCreateForm = true"
         >
-          + New Node
-        </button>
+          New Node
+        </UiButton>
       </div>
 
       <!-- Create form -->
@@ -129,19 +185,12 @@ onMounted(() => {
               @keyup.enter="doCreateNode"
             />
           </div>
-          <button
-            class="h-11 rounded-md bg-signal px-4 text-[13px] font-extrabold text-abyss transition hover:bg-signal/85"
-            :disabled="creating"
-            @click="doCreateNode"
-          >
+          <UiButton variant="primary" :disabled="creating" @click="doCreateNode">
             {{ creating ? 'Creating...' : 'Create' }}
-          </button>
-          <button
-            class="h-11 rounded-md border border-snow/10 px-3 text-[13px] font-bold text-slate transition hover:bg-snow/[.06]"
-            @click="showCreateForm = false"
-          >
+          </UiButton>
+          <UiButton :disabled="creating" @click="showCreateForm = false">
             Cancel
-          </button>
+          </UiButton>
         </div>
         <p v-if="createError" class="mt-2 text-[13px] text-red font-bold">{{ createError }}</p>
       </div>
@@ -152,7 +201,7 @@ onMounted(() => {
       </div>
 
       <div v-else-if="nodes.length > 0" class="overflow-auto">
-        <table class="min-w-[960px] w-full border-collapse">
+        <table class="min-w-[1100px] w-full border-collapse">
           <thead>
             <tr class="bg-snow/[.035] text-left text-xs text-slate">
               <th class="border-b border-snow/10 w-10 px-[18px] py-[15px]"></th>
@@ -164,13 +213,12 @@ onMounted(() => {
               <th class="border-b border-snow/10 px-[18px] py-[15px]">Gateway</th>
               <th class="border-b border-snow/10 px-[18px] py-[15px]">Last Heartbeat</th>
               <th class="border-b border-snow/10 px-[18px] py-[15px]">Tags</th>
+              <th v-if="isAdmin()" class="border-b border-snow/10 px-[18px] py-[15px]">Actions</th>
             </tr>
           </thead>
           <tbody>
             <template v-for="node in nodes" :key="node.id">
-              <tr
-                class="cursor-pointer text-[13px] text-parchment transition hover:bg-snow/[.04]"
-              >
+              <tr class="text-[13px] text-parchment transition hover:bg-snow/[.04]">
                 <td class="border-b border-snow/10 px-[18px] py-[15px]">
                   <button
                     class="inline-flex size-6 items-center justify-center rounded text-slate transition hover:text-snow"
@@ -182,7 +230,7 @@ onMounted(() => {
                   </button>
                 </td>
                 <td
-                  class="border-b border-snow/10 px-[18px] py-[15px] font-black text-snow hover:underline"
+                  class="border-b border-snow/10 px-[18px] py-[15px] font-black text-snow cursor-pointer hover:underline"
                   @click="router.push('/nodes/' + node.id)"
                 >{{ node.name }}</td>
                 <td class="border-b border-snow/10 px-[18px] py-[15px]" @click="router.push('/nodes/' + node.id)">
@@ -201,10 +249,30 @@ onMounted(() => {
                   >{{ tag }}</span>
                   <span v-if="node.tags.length === 0" class="text-slate/50">—</span>
                 </td>
+                <td v-if="isAdmin()" class="border-b border-snow/10 px-[18px] py-[15px]">
+                  <div class="flex flex-wrap gap-1.5">
+                    <button
+                      class="min-h-[34px] rounded-md border border-snow/10 bg-snow/[.055] px-2.5 text-xs font-bold text-snow transition hover:bg-snow/[.09]"
+                      type="button"
+                      @click.stop="openRenameDialog(node.id, node.name)"
+                    >
+                      Rename
+                    </button>
+                    <button
+                      v-if="node.status !== 'online'"
+                      class="min-h-[34px] rounded-md border border-danger/35 bg-danger/10 px-2.5 text-xs font-bold text-danger transition hover:bg-danger/15"
+                      type="button"
+                      :disabled="deleteBusyId === node.id"
+                      @click.stop="deleteNode(node.id, node.name)"
+                    >
+                      {{ deleteBusyId === node.id ? 'Deleting...' : 'Delete' }}
+                    </button>
+                  </div>
+                </td>
               </tr>
               <!-- Expandable command row -->
               <tr v-if="expandedNodeId === node.id && isAdmin()" class="bg-signal/[.03]">
-                <td colspan="9" class="border-b border-snow/10 px-[18px] py-4">
+                <td :colspan="isAdmin() ? 10 : 9" class="border-b border-snow/10 px-[18px] py-4">
                   <div v-if="nodeCommands[node.id]" class="flex items-center gap-3">
                     <code class="flex-1 rounded-md bg-carbon px-3 py-2 text-[12px] text-parchment font-mono break-all">{{ nodeCommands[node.id].command }}</code>
                     <button
@@ -223,5 +291,30 @@ onMounted(() => {
         </table>
       </div>
     </section>
+
+    <!-- Rename dialog -->
+    <div v-if="renameDialogOpen" class="fixed inset-0 z-40 grid place-items-center bg-black/55 p-4">
+      <div class="w-full max-w-[420px] rounded-md border border-snow/10 bg-carbon p-4 shadow-dramatic">
+        <h3 class="m-0 text-base font-extrabold text-snow">Rename Node</h3>
+        <p class="mt-1 text-xs text-slate">Enter a new name for this node.</p>
+        <input
+          v-model="renameDialogName"
+          class="mt-3 h-11 w-full"
+          placeholder="Node name"
+          @keyup.enter="submitRename"
+        />
+        <div v-if="renameDialogError" class="mt-2 text-xs text-danger">{{ renameDialogError }}</div>
+        <div class="mt-3 flex items-center justify-end gap-2">
+          <UiButton :disabled="renameBusy" @click="closeRenameDialog">Cancel</UiButton>
+          <UiButton
+            variant="primary"
+            :disabled="!renameDialogName.trim() || renameBusy"
+            @click="submitRename"
+          >
+            {{ renameBusy ? 'Saving...' : 'Save' }}
+          </UiButton>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
