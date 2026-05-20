@@ -1552,6 +1552,11 @@ export function startServer(opts: ServerOptions): ReturnType<typeof createServer
   }
 
   const server = createServer((req, res) => {
+    const start = Date.now()
+    res.on('finish', () => {
+      const ms = Date.now() - start
+      console.log(`[hermes-hub] ${req.method} ${req.url} → ${res.statusCode} (${ms}ms)`)
+    })
     void handleRequest(req, res, opts, db)
   })
 
