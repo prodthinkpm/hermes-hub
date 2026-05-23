@@ -71,12 +71,12 @@ async function doGatewayAction(id: string, action: 'start' | 'stop' | 'restart')
                   <div class="grid size-[38px] place-items-center rounded-md border border-signal/25 bg-signal/10 font-black text-signal">{{ profile.letter }}</div>
                   <div class="min-w-0 flex-1">
                     <div class="font-black text-snow">{{ profile.name }}</div>
-                    <div class="mt-0.5 text-xs text-slate">{{ profile.desc }}</div>
+                    <div class="mt-0.5 text-xs text-slate">{{ profile.nodeLabel }}</div>
                   </div>
                 </div>
               </td>
               <td class="border-b border-snow/10 px-[18px] py-[15px] align-top">
-                <StatusBadge tone="info">{{ profile.desc }}</StatusBadge>
+                <StatusBadge tone="info">{{ profile.nodeLabel }}</StatusBadge>
               </td>
               <td class="border-b border-snow/10 px-[18px] py-[15px] align-top">
                 <StatusBadge :tone="profile.gatewayTone">{{ profile.gatewayText }}</StatusBadge>

@@ -9,6 +9,8 @@ export const router = createRouter({
     { path: '/', name: 'dashboard' satisfies RouteKey, component: DashboardPage },
     { path: '/profiles', name: 'profiles' satisfies RouteKey, component: ProfilesPage },
     { path: '/create', name: 'create' satisfies RouteKey, component: () => import('@/pages/CreateProfilePage.vue') },
+    { path: '/profiles/:id/setup', name: 'profileSetup' satisfies RouteKey, component: () => import('@/pages/ProfileSetupFormPage.vue') },
+    { path: '/profiles/:id/setup/progress', name: 'profileSetupProgress' satisfies RouteKey, component: () => import('@/pages/ProfileSetupPage.vue') },
     { path: '/profiles/:id/logs', name: 'profileLogs' satisfies RouteKey, component: () => import('@/pages/ProfileLogsPage.vue') },
     { path: '/profiles/:id', name: 'profile' satisfies RouteKey, component: () => import('@/pages/ProfileDetailPage.vue') },
     { path: '/services', name: 'services' satisfies RouteKey, component: () => import('@/pages/ServicesPage.vue') },

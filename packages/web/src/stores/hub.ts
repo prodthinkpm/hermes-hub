@@ -1,8 +1,33 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { HermesApiClient, type CreateProfilePayload, type HubNode, type LogEntry, type ManagedAgent, type ProfileRow } from '@hermes-hub/core'
+import {
+  HermesApiClient,
+  type ConfigReadResult,
+  type CreateProfilePayload,
+  type EnvStatusResult,
+  type HubNode,
+  type LogEntry,
+  type ManagedAgent,
+  type ProfileRow,
+  type QueryEnvelope,
+  type SetupCatalogResult,
+  type SkillsListResult,
+  type SoulReadResult,
+} from '@hermes-hub/core'
+import type { HubCommand } from '@hermes-hub/core'
+import type { SetupRunPayload } from '@hermes-hub/core'
 
 const api = new HermesApiClient()
+
+function asText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value == null) return ''
+  return String(value)
+}
+
+function trimmedText(value: unknown): string {
+  return asText(value).trim()
+}
 
 export const useHubStore = defineStore('hub', () => {
   const profiles = ref<ProfileRow[]>([])
@@ -68,10 +93,21 @@ export const useHubStore = defineStore('hub', () => {
 
     if (agentResult.ok && agentResult.data) {
       agents.value = agentResult.data
-      profiles.value = agentResult.data.map((agent) => api.agentToProfileRow(agent)).map((profile) => ({
-        ...profile,
-        checked: previousChecked.get(profile.id) ?? false,
-      }))
+      const nodeNameById = new Map(nodes.value.map((node) => [node.id, node.name]))
+      profiles.value = agentResult.data
+        .map((agent) => {
+          const profile = api.agentToProfileRow(agent)
+          const nodeLabel = nodeNameById.get(profile.nodeId) ?? profile.nodeId
+          return {
+            ...profile,
+            desc: nodeLabel,
+            nodeLabel,
+          }
+        })
+        .map((profile) => ({
+          ...profile,
+          checked: previousChecked.get(profile.id) ?? false,
+        }))
     } else {
       agents.value = []
       profilesError.value = agentResult.error ?? 'Failed to fetch agents'
@@ -82,12 +118,13 @@ export const useHubStore = defineStore('hub', () => {
   }
 
   async function fetchProfile(id: string): Promise<ProfileRow | null> {
-    const result = await api.getProfile(id)
-    if (!result.ok || !result.data) return null
-    return result.data
+    if (!profiles.value.length) {
+      await fetchProfiles()
+    }
+    return profiles.value.find((profile) => profile.id === id) ?? null
   }
 
-  async function createAgent(payload: CreateProfilePayload): Promise<{ ok: boolean; error?: string; steps?: string[]; commandId?: string }> {
+  async function createAgent(payload: CreateProfilePayload): Promise<{ ok: boolean; error?: string; commandId?: string; agentId?: string }> {
     const result = await api.createProfile(payload)
     if (!result.ok || !result.data) {
       return { ok: false, error: result.error ?? 'Failed to queue create command' }
@@ -104,7 +141,22 @@ export const useHubStore = defineStore('hub', () => {
       }
     }
     await fetchProfiles()
-    return { ok: true, steps: result.data.nextSteps, commandId }
+    const nodeId = finalCmd.ok && finalCmd.data ? finalCmd.data.nodeId : undefined
+    const profileNameRaw = finalCmd.ok && finalCmd.data && finalCmd.data.result
+      ? finalCmd.data.result.profile_name
+      : undefined
+    const profileName = trimmedText(profileNameRaw) || payload.name
+    return { ok: true, commandId, agentId: nodeId ? `${nodeId}:${profileName}` : undefined }
+  }
+
+  async function waitForCommandWithUpdates(
+    id: string,
+    maxWaitMs: number,
+    onUpdate: (command: HubCommand) => void,
+  ): Promise<{ ok: boolean; error?: string; command?: HubCommand }> {
+    const result = await api.waitForCommand(id, maxWaitMs, onUpdate)
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Command wait failed' }
+    return { ok: true, command: result.data }
   }
 
   async function renameAgent(id: string, name: string): Promise<{ ok: boolean; error?: string; commandId?: string }> {
@@ -146,9 +198,9 @@ export const useHubStore = defineStore('hub', () => {
     return { ok: true }
   }
 
-  async function fetchProfileConfig(id: string): Promise<string> {
+  async function fetchProfileConfig(id: string): Promise<QueryEnvelope<ConfigReadResult> | null> {
     const result = await api.getProfileConfig(id)
-    if (!result.ok || result.data === undefined) return ''
+    if (!result.ok || !result.data) return null
     return result.data
   }
 
@@ -158,9 +210,9 @@ export const useHubStore = defineStore('hub', () => {
     return { ok: true }
   }
 
-  async function fetchProfileSoul(id: string): Promise<string> {
+  async function fetchProfileSoul(id: string): Promise<QueryEnvelope<SoulReadResult> | null> {
     const result = await api.getProfileSoul(id)
-    if (!result.ok || result.data === undefined) return ''
+    if (!result.ok || !result.data) return null
     return result.data
   }
 
@@ -170,16 +222,16 @@ export const useHubStore = defineStore('hub', () => {
     return { ok: true }
   }
 
-  async function fetchProfileSkills(id: string): Promise<string[]> {
+  async function fetchProfileSkills(id: string): Promise<QueryEnvelope<SkillsListResult> | null> {
     const result = await api.getProfileSkills(id)
-    if (!result.ok || !result.data) return []
+    if (!result.ok || !result.data) return null
     return result.data
   }
 
   // Env 管理（Phase 6）
-  async function fetchEnvStatus(id: string): Promise<string[]> {
+  async function fetchEnvStatus(id: string): Promise<QueryEnvelope<EnvStatusResult> | null> {
     const result = await api.getEnvStatus(id)
-    if (!result.ok || !result.data) return []
+    if (!result.ok || !result.data) return null
     return result.data
   }
 
@@ -307,8 +359,20 @@ export const useHubStore = defineStore('hub', () => {
   }
 
   // Setup / Doctor
-  async function runSetup(id: string, section: string = 'all'): Promise<{ ok: boolean; error?: string }> {
-    const result = await api.runSetup(id, section)
+  async function queueSetup(id: string, payload: SetupRunPayload = { mode: 'create_flow' }): Promise<{ ok: boolean; error?: string; commandId?: string }> {
+    const result = await api.runSetup(id, payload)
+    if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue setup' }
+    return { ok: true, commandId: result.data.id }
+  }
+
+  async function fetchSetupCatalog(id: string): Promise<QueryEnvelope<SetupCatalogResult> | null> {
+    const result = await api.getSetupCatalog(id)
+    if (!result.ok || !result.data) return null
+    return result.data
+  }
+
+  async function runSetup(id: string, payload: SetupRunPayload = { mode: 'create_flow' }): Promise<{ ok: boolean; error?: string }> {
+    const result = await api.runSetup(id, payload)
     if (!result.ok || !result.data) return { ok: false, error: result.error ?? 'Failed to queue setup' }
     const finalCmd = await api.waitForCommand(result.data.id, 600_000)  // setup 可能耗时较长，最多等 10 分钟
     if (finalCmd.ok && finalCmd.data) {
@@ -391,6 +455,7 @@ export const useHubStore = defineStore('hub', () => {
     renameAgent,
     deleteAgent,
     fetchProfileConfig,
+    fetchSetupCatalog,
     saveProfileConfig,
     fetchProfileSoul,
     saveProfileSoul,
@@ -416,8 +481,10 @@ export const useHubStore = defineStore('hub', () => {
     setEnv,
     deleteEnv,
     // Setup / Doctor
+    queueSetup,
     runSetup,
     runDoctor,
+    waitForCommandWithUpdates,
     createProfile,
     toggleAllProfiles,
     disposeToastTimer,

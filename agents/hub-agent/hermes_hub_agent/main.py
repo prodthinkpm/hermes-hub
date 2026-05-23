@@ -9,6 +9,7 @@ from typing import Any
 from .command_runner import CommandRunner
 from .heartbeat import AgentConfig, build_heartbeat_payload, build_register_payload, heartbeat_loop
 from .hub_client import HubClient
+from .query_channel import QueryChannelClient
 from .scanner import scan_profiles
 
 
@@ -77,9 +78,21 @@ def cmd_daemon(args: argparse.Namespace) -> None:
     )
     command_thread.start()
 
+    query_channel = QueryChannelClient(
+        config,
+        query_handler=command_runner.run_query,
+    )
+    query_thread = threading.Thread(
+        target=query_channel.loop,
+        name="query-channel",
+        daemon=True,
+    )
+    query_thread.start()
+
     try:
         heartbeat_loop(config)
     finally:
+        query_channel.close()
         command_runner.close()
 
 

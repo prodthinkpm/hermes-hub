@@ -15,6 +15,7 @@ import type {
   AgentSetupStatus,
   AgentRuntimeStatus,
   AgentApiStatus,
+  ReadQueryType,
 } from '@hermes-hub/protocol'
 
 // ---- Row types (match SQLite column names) ----
@@ -73,12 +74,23 @@ export interface DbCommandRow {
   stdout: string | null
   stderr: string | null
   error: string | null
+  result: string | null
   timeout_seconds: number
   created_by: string
   created_at: string
   dispatched_at: string | null
   started_at: string | null
   finished_at: string | null
+  updated_at: string
+}
+
+export interface DbQueryCacheRow {
+  cache_key: string
+  node_id: string
+  agent_id: string | null
+  query_type: string
+  payload_key: string
+  data_json: string
   updated_at: string
 }
 
@@ -189,6 +201,7 @@ export function rowToCommand(row: DbCommandRow): HubCommand {
     stdout: row.stdout ?? undefined,
     stderr: row.stderr ?? undefined,
     error: row.error ?? undefined,
+    result: row.result ? (JSON.parse(row.result) as Record<string, unknown>) : undefined,
     timeoutSeconds: row.timeout_seconds,
     createdBy: row.created_by,
     createdAt: row.created_at,
@@ -210,6 +223,7 @@ export function commandToRow(cmd: HubCommand): DbCommandRow {
     stdout: cmd.stdout ?? null,
     stderr: cmd.stderr ?? null,
     error: cmd.error ?? null,
+    result: cmd.result ? JSON.stringify(cmd.result) : null,
     timeout_seconds: cmd.timeoutSeconds,
     created_by: cmd.createdBy,
     created_at: cmd.createdAt,
@@ -278,6 +292,7 @@ function runMigrations(db: Database.Database): void {
       stdout           TEXT,
       stderr           TEXT,
       error            TEXT,
+      result           TEXT,
       timeout_seconds  INTEGER NOT NULL DEFAULT 300,
       created_by       TEXT NOT NULL DEFAULT 'local-user',
       created_at       TEXT NOT NULL,
@@ -307,6 +322,16 @@ function runMigrations(db: Database.Database): void {
       role          TEXT NOT NULL DEFAULT 'viewer',
       created_at    TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS query_cache (
+      cache_key   TEXT PRIMARY KEY,
+      node_id     TEXT NOT NULL,
+      agent_id    TEXT,
+      query_type  TEXT NOT NULL,
+      payload_key TEXT NOT NULL DEFAULT '{}',
+      data_json   TEXT NOT NULL,
+      updated_at  TEXT NOT NULL
+    );
   `)
 
   // Phase 10: add token column to existing nodes table (safe if already exists)
@@ -314,6 +339,12 @@ function runMigrations(db: Database.Database): void {
     db.exec('ALTER TABLE nodes ADD COLUMN token TEXT')
   } catch {
     // Column already exists — ok
+  }
+
+  try {
+    db.exec('ALTER TABLE commands ADD COLUMN result TEXT')
+  } catch {
+    // Column already exists
   }
 
   // Seed the command counter if not present (restart-safe).
@@ -561,14 +592,89 @@ export function upsertCommand(db: Database.Database, cmd: HubCommand): void {
   const row = commandToRow(cmd)
   db.prepare(`
     INSERT OR REPLACE INTO commands
-      (id, node_id, agent_id, type, payload, status, stdout, stderr, error,
+      (id, node_id, agent_id, type, payload, status, stdout, stderr, error, result,
        timeout_seconds, created_by, created_at, dispatched_at, started_at,
        finished_at, updated_at)
     VALUES
-      (@id, @node_id, @agent_id, @type, @payload, @status, @stdout, @stderr, @error,
+      (@id, @node_id, @agent_id, @type, @payload, @status, @stdout, @stderr, @error, @result,
        @timeout_seconds, @created_by, @created_at, @dispatched_at, @started_at,
        @finished_at, @updated_at)
   `).run(row)
+}
+
+// -- Query cache --
+
+export function getQueryCache(
+  db: Database.Database,
+  cacheKey: string,
+): { nodeId: string; agentId?: string; queryType: ReadQueryType; payloadKey: string; data: Record<string, unknown>; updatedAt: string } | undefined {
+  const row = db.prepare('SELECT * FROM query_cache WHERE cache_key = ?').get(cacheKey) as DbQueryCacheRow | undefined
+  if (!row) return undefined
+  return {
+    nodeId: row.node_id,
+    agentId: row.agent_id ?? undefined,
+    queryType: row.query_type as ReadQueryType,
+    payloadKey: row.payload_key,
+    data: JSON.parse(row.data_json) as Record<string, unknown>,
+    updatedAt: row.updated_at,
+  }
+}
+
+export function upsertQueryCache(
+  db: Database.Database,
+  entry: {
+    cacheKey: string
+    nodeId: string
+    agentId?: string
+    queryType: ReadQueryType
+    payloadKey: string
+    data: Record<string, unknown>
+    updatedAt: string
+  },
+): void {
+  db.prepare(`
+    INSERT OR REPLACE INTO query_cache
+      (cache_key, node_id, agent_id, query_type, payload_key, data_json, updated_at)
+    VALUES
+      (@cache_key, @node_id, @agent_id, @query_type, @payload_key, @data_json, @updated_at)
+  `).run({
+    cache_key: entry.cacheKey,
+    node_id: entry.nodeId,
+    agent_id: entry.agentId ?? null,
+    query_type: entry.queryType,
+    payload_key: entry.payloadKey,
+    data_json: JSON.stringify(entry.data),
+    updated_at: entry.updatedAt,
+  })
+}
+
+export function deleteQueryCacheByPrefix(db: Database.Database, prefix: string): void {
+  db.prepare('DELETE FROM query_cache WHERE cache_key LIKE ?').run(`${prefix}%`)
+}
+
+export function deleteQueryCacheByAgentAndTypes(
+  db: Database.Database,
+  nodeId: string,
+  agentId: string,
+  queryTypes: ReadonlyArray<ReadQueryType>,
+): void {
+  if (!queryTypes.length) return
+  const placeholders = Array.from({ length: queryTypes.length }, () => '?').join(',')
+  db.prepare(
+    `DELETE FROM query_cache WHERE node_id = ? AND agent_id = ? AND query_type IN (${placeholders})`,
+  ).run(nodeId, agentId, ...queryTypes)
+}
+
+export function deleteQueryCacheByNodeAndTypes(
+  db: Database.Database,
+  nodeId: string,
+  queryTypes: ReadonlyArray<ReadQueryType>,
+): void {
+  if (!queryTypes.length) return
+  const placeholders = Array.from({ length: queryTypes.length }, () => '?').join(',')
+  db.prepare(
+    `DELETE FROM query_cache WHERE node_id = ? AND query_type IN (${placeholders})`,
+  ).run(nodeId, ...queryTypes)
 }
 
 // -- Counter (atomic read+increment, replaces nextCommandNumber) --

@@ -10,8 +10,9 @@ import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
+import yaml
 from .heartbeat import AgentConfig
 from .hermes_imports import prepare_hermes_imports
 from .hub_client import HubClient
@@ -20,6 +21,24 @@ from .scanner import inspect_profile, scan_profiles
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+SETUP_STEP_ORDER = [
+    "preflight.validate_profile_home",
+    "fs.ensure_directory_structure",
+    "config.write_yaml",
+    "config.validate_yaml",
+    "env.write_file",
+    "env.validate_required_keys",
+    "soul.write_file",
+    "provider.validate",
+    "terminal.validate",
+    "gateway.validate",
+    "tools.validate",
+    "agent_behavior.validate_and_finalize",
+]
+
+TERMINAL_STATUSES = {"success", "failed", "timeout", "cancelled"}
 
 
 class CommandRunner:
@@ -70,7 +89,7 @@ class CommandRunner:
                 continue
 
             self.client.mark_command_started(self.config.node_id, command_id)
-            result = self.run_command(command)
+            result = self.run_command(command, command_id=command_id, node_id=str(command.get("nodeId") or self.config.node_id))
             report_response = self.client.report_command_result(self.config.node_id, command_id, result)
 
             results.append({
@@ -89,7 +108,12 @@ class CommandRunner:
 
     # ── dispatch ──────────────────────────────────────────────────────
 
-    def run_command(self, command: dict[str, Any]) -> dict[str, Any]:
+    def run_command(
+        self,
+        command: dict[str, Any],
+        command_id: str | None = None,
+        node_id: str | None = None,
+    ) -> dict[str, Any]:
         started_at = now_iso()
 
         try:
@@ -134,7 +158,15 @@ class CommandRunner:
                 return success_result(self.command_profile_delete(payload), started_at)
 
             if command_type == "setup.run":
-                return success_result(self.command_setup_run(payload), started_at)
+                return self.run_setup_command(
+                    payload,
+                    started_at=started_at,
+                    command_id=command_id,
+                    node_id=node_id,
+                )
+
+            if command_type == "setup.catalog":
+                return success_result(self.command_setup_catalog(payload), started_at)
 
             if command_type == "doctor.run":
                 return success_result(self.command_doctor_run(payload), started_at)
@@ -169,11 +201,45 @@ class CommandRunner:
             return {
                 "status": "failed",
                 "stdout": "",
-                "stderr": traceback.format_exc(),
+                "stderr": sanitize_text(traceback.format_exc()),
                 "error": str(exc),
                 "started_at": started_at,
                 "finished_at": now_iso(),
             }
+
+    def run_query(
+        self,
+        query_type: str,
+        payload: dict[str, Any] | None = None,
+        _agent_id: str | None = None,
+    ) -> dict[str, Any]:
+        body = payload if isinstance(payload, dict) else {}
+
+        if query_type == "profile.scan":
+            return self.command_profile_scan(body)
+
+        if query_type == "config.read":
+            return self.command_config_read(body)
+
+        if query_type == "env.status":
+            return self.command_env_status(body)
+
+        if query_type == "soul.read":
+            return self.command_soul_read(body)
+
+        if query_type == "gateway.status":
+            return self.command_gateway_status(body)
+
+        if query_type == "sessions.list":
+            return self.command_sessions_list(body)
+
+        if query_type == "skills.list":
+            return self.command_skills_list(body)
+
+        if query_type == "setup.catalog":
+            return self.command_setup_catalog(body)
+
+        raise ValueError(f"Unsupported query type: {query_type}")
 
     # ── read-only handlers ────────────────────────────────────────────
 
@@ -201,12 +267,17 @@ class CommandRunner:
             return inspected
 
         profile = inspected.get("profile") or {}
+        config_path_value = profile.get("config_path")
+        config_path = Path(str(config_path_value)) if config_path_value else (Path(profile_home) / "config.yaml")
+        config_content = ""
+        if config_path.exists() and config_path.is_file():
+            config_content = config_path.read_text(encoding="utf-8", errors="replace")
 
         return {
             "profile_home": profile_home,
-            "config_path": profile.get("config_path"),
+            "config_path": str(config_path),
             "has_config": profile.get("has_config"),
-            "config": profile.get("config"),
+            "config": config_content,
             "provider": profile.get("provider"),
             "model": profile.get("model"),
             "terminal_cwd": profile.get("terminal_cwd"),
@@ -321,19 +392,198 @@ class CommandRunner:
 
     # ── write / destructive handlers ──────────────────────────────────
 
-    def command_setup_run(self, payload: dict[str, Any]) -> dict[str, Any]:
-        profile_home = self.resolve_profile_home(payload)
-        section = str(payload.get("section") or "all")
-        timeout = int(payload.get("timeoutSeconds") or 300)
+    def run_setup_command(
+        self,
+        payload: dict[str, Any],
+        *,
+        started_at: str,
+        command_id: str | None,
+        node_id: str | None,
+    ) -> dict[str, Any]:
+        def progress_report(update: dict[str, Any]) -> None:
+            if not command_id or not node_id:
+                return
+            self.client.report_command_result(
+                node_id,
+                command_id,
+                {
+                    "status": "running",
+                    "result": update,
+                    "started_at": started_at,
+                },
+            )
 
-        result = self._run_hermes_cli(profile_home, ["setup", "--section", section], timeout)
+        setup_result = self.command_setup_run(payload, report_progress=progress_report)
+        finished_at = now_iso()
 
+        if setup_result["status"] == "success":
+            return {
+                "status": "success",
+                "stdout": "setup completed",
+                "stderr": "",
+                "result": setup_result,
+                "started_at": started_at,
+                "finished_at": finished_at,
+            }
+
+        error = setup_result.get("error") or {}
         return {
+            "status": "failed",
+            "stdout": "",
+            "stderr": str(error.get("details_ref") or ""),
+            "error": str(error.get("message") or "setup failed"),
+            "result": setup_result,
+            "started_at": started_at,
+            "finished_at": finished_at,
+        }
+
+    def command_setup_run(
+        self,
+        payload: dict[str, Any],
+        report_progress: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        profile_home = self.resolve_profile_home(payload)
+        mode = str(payload.get("mode") or "create_flow")
+        resume_from_step = payload.get("resume_from_step")
+        inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
+
+        if resume_from_step is not None and resume_from_step not in SETUP_STEP_ORDER:
+            raise ValueError(f"Invalid resume_from_step: {resume_from_step}")
+
+        resume_index = SETUP_STEP_ORDER.index(str(resume_from_step)) if resume_from_step in SETUP_STEP_ORDER else 0
+        step_results: list[dict[str, Any]] = [{"step": step, "status": "pending"} for step in SETUP_STEP_ORDER]
+        artifacts = {
+            "config_written": False,
+            "env_written": False,
+            "soul_written": False,
+        }
+
+        context: dict[str, Any] = {
             "profile_home": profile_home,
-            "section": section,
-            "returncode": result["returncode"],
-            "stdout": result["stdout"],
-            "stderr": result["stderr"],
+            "mode": mode,
+            "inputs": inputs,
+            "config": None,
+        }
+
+        # Repair mode may resume from mid-pipeline; apply input overrides so retries are effective.
+        if mode == "repair" and resume_index > 0:
+            if resume_index > SETUP_STEP_ORDER.index("config.write_yaml"):
+                self._setup_step_config_write_yaml(context)
+            if resume_index > SETUP_STEP_ORDER.index("config.validate_yaml"):
+                self._setup_step_config_validate_yaml(context)
+            if resume_index > SETUP_STEP_ORDER.index("env.write_file"):
+                self._setup_step_env_write_file(context)
+            if resume_index > SETUP_STEP_ORDER.index("soul.write_file"):
+                self._setup_step_soul_write_file(context)
+
+        if report_progress:
+            report_progress({
+                "status": "running",
+                "step_results": step_results,
+                "artifacts": artifacts,
+            })
+
+        step_handlers: list[Callable[[dict[str, Any]], str]] = [
+            self._setup_step_preflight_validate_profile_home,
+            self._setup_step_fs_ensure_directory_structure,
+            self._setup_step_config_write_yaml,
+            self._setup_step_config_validate_yaml,
+            self._setup_step_env_write_file,
+            self._setup_step_env_validate_required_keys,
+            self._setup_step_soul_write_file,
+            self._setup_step_provider_validate,
+            self._setup_step_terminal_validate,
+            self._setup_step_gateway_validate,
+            self._setup_step_tools_validate,
+            self._setup_step_agent_behavior_validate_finalize,
+        ]
+
+        for index, step_name in enumerate(SETUP_STEP_ORDER):
+            result_row = step_results[index]
+
+            if index < resume_index:
+                result_row.update({
+                    "status": "skipped",
+                    "summary": "Skipped by resume_from_step",
+                })
+                continue
+
+            started = time.perf_counter()
+            started_at = now_iso()
+            result_row["status"] = "running"
+            result_row["started_at"] = started_at
+            if report_progress:
+                report_progress({
+                    "status": "running",
+                    "step_results": step_results,
+                    "artifacts": artifacts,
+                })
+
+            try:
+                summary = step_handlers[index](context)
+                ended_at = now_iso()
+                result_row.update({
+                    "status": "success",
+                    "ended_at": ended_at,
+                    "duration_ms": int((time.perf_counter() - started) * 1000),
+                    "summary": summary,
+                })
+
+                if step_name == "config.write_yaml":
+                    artifacts["config_written"] = True
+                elif step_name == "env.write_file":
+                    artifacts["env_written"] = True
+                elif step_name == "soul.write_file":
+                    artifacts["soul_written"] = True
+
+                if report_progress:
+                    report_progress({
+                        "status": "running",
+                        "step_results": step_results,
+                        "artifacts": artifacts,
+                    })
+            except Exception as exc:
+                stderr_ref = sanitize_text(traceback.format_exc())[:600]
+                ended_at = now_iso()
+                result_row.update({
+                    "status": "failed",
+                    "ended_at": ended_at,
+                    "duration_ms": int((time.perf_counter() - started) * 1000),
+                    "summary": str(exc),
+                    "error_code": f"setup.{step_name}.failed",
+                    "stderr_ref": stderr_ref,
+                })
+                failed = {
+                    "status": "failed",
+                    "step_results": step_results,
+                    "artifacts": artifacts,
+                    "error": {
+                        "code": f"setup.{step_name}.failed",
+                        "message": str(exc),
+                        "hint": "Fix the failed step input and retry from failed step.",
+                        "retriable": True,
+                        "details_ref": stderr_ref,
+                    },
+                }
+                if report_progress:
+                    report_progress(failed)
+                return failed
+
+        success = {
+            "status": "success",
+            "step_results": step_results,
+            "artifacts": artifacts,
+        }
+        if report_progress:
+            report_progress(success)
+        return success
+
+    def command_setup_catalog(self, payload: dict[str, Any]) -> dict[str, Any]:
+        _ = payload
+        return {
+            "providers": _load_setup_catalog(self.config.hermes_home),
+            "generated_at": now_iso(),
+            "source": "hermes-agent",
         }
 
     def command_doctor_run(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -360,14 +610,20 @@ class CommandRunner:
         profile_dir.mkdir(parents=True, exist_ok=False)
 
         # Clone from another profile if requested.
+        clone_from_profile_home = payload.get("clone_from_profile_home")
         clone_from = payload.get("clone_from")
-        if clone_from:
+        source_dir: Path | None = None
+        if isinstance(clone_from_profile_home, str) and clone_from_profile_home.strip():
+            source_dir = self._validate_profile_home(Path(clone_from_profile_home.strip()))
+        elif clone_from:
             clone_from = validate_profile_name(clone_from, "clone_from")
             source_dir = (
                 self._validate_profile_home(root / "profiles" / clone_from)
                 if clone_from != "default"
                 else root
             )
+
+        if source_dir is not None:
             for name in ("config.yaml", ".env", "SOUL.md", "skills"):
                 src = source_dir / name
                 if src.exists():
@@ -601,6 +857,229 @@ class CommandRunner:
 
     # ── helpers ───────────────────────────────────────────────────────
 
+    def _setup_step_preflight_validate_profile_home(self, context: dict[str, Any]) -> str:
+        profile_home = Path(str(context["profile_home"]))
+        if not profile_home.exists():
+            profile_home.mkdir(parents=True, exist_ok=True)
+        self._validate_profile_home(profile_home)
+        return "profile_home validated"
+
+    def _setup_step_fs_ensure_directory_structure(self, context: dict[str, Any]) -> str:
+        profile_home = Path(str(context["profile_home"]))
+        created: list[str] = []
+        for name in ("logs", "skills", "cron", "tmp", "gateway", "terminal"):
+            target = profile_home / name
+            if not target.exists():
+                created.append(name)
+            target.mkdir(parents=True, exist_ok=True)
+        return f"directories ready ({', '.join(created) if created else 'no changes'})"
+
+    def _setup_step_config_write_yaml(self, context: dict[str, Any]) -> str:
+        profile_home = Path(str(context["profile_home"]))
+        config_path = profile_home / "config.yaml"
+        inputs = context.get("inputs") if isinstance(context.get("inputs"), dict) else {}
+
+        raw_override = inputs.get("config_yaml")
+        if isinstance(raw_override, str) and raw_override.strip():
+            config_path.write_text(raw_override, encoding="utf-8")
+            loaded = yaml.safe_load(raw_override) or {}
+            context["config"] = loaded if isinstance(loaded, dict) else {}
+            return "config.yaml written from raw override"
+
+        existing: dict[str, Any] = {}
+        if config_path.exists():
+            loaded_existing = yaml.safe_load(config_path.read_text(encoding="utf-8", errors="replace")) or {}
+            if isinstance(loaded_existing, dict):
+                existing = loaded_existing
+
+        provider = inputs.get("provider")
+        model_input = inputs.get("model") if isinstance(inputs.get("model"), dict) else {}
+        terminal = inputs.get("terminal") if isinstance(inputs.get("terminal"), dict) else {}
+        gateway = inputs.get("gateway") if isinstance(inputs.get("gateway"), dict) else {}
+        tools = inputs.get("tools") if isinstance(inputs.get("tools"), dict) else {}
+        behavior = inputs.get("agent_behavior") if isinstance(inputs.get("agent_behavior"), dict) else {}
+
+        model = existing.get("model")
+        if not isinstance(model, dict):
+            model = {}
+        if isinstance(provider, str) and provider.strip():
+            model["provider"] = provider.strip()
+        model_default = model_input.get("default")
+        if isinstance(model_default, str) and model_default.strip():
+            model["default"] = model_default.strip()
+        model_base_url = model_input.get("base_url")
+        if isinstance(model_base_url, str):
+            if model_base_url.strip():
+                model["base_url"] = model_base_url.strip()
+            elif "base_url" in model:
+                model.pop("base_url", None)
+        existing["model"] = model
+
+        terminal_conf = existing.get("terminal")
+        if not isinstance(terminal_conf, dict):
+            terminal_conf = {}
+        terminal_cwd = terminal.get("cwd")
+        if isinstance(terminal_cwd, str) and terminal_cwd.strip():
+            terminal_conf["cwd"] = terminal_cwd.strip()
+        else:
+            terminal_conf.setdefault("cwd", ".")
+        existing["terminal"] = terminal_conf
+
+        gateway_conf = existing.get("gateway")
+        if not isinstance(gateway_conf, dict):
+            gateway_conf = {}
+        gateway_endpoint = gateway.get("endpoint")
+        if isinstance(gateway_endpoint, str) and gateway_endpoint.strip():
+            gateway_conf["endpoint"] = gateway_endpoint.strip()
+        gateway_platforms = gateway.get("platforms")
+        if isinstance(gateway_platforms, list):
+            gateway_conf["platforms"] = [str(item).strip() for item in gateway_platforms if str(item).strip()]
+        existing["gateway"] = gateway_conf
+
+        tools_conf = existing.get("tools")
+        if not isinstance(tools_conf, dict):
+            tools_conf = {}
+        allow_tools = tools.get("allow")
+        if isinstance(allow_tools, list):
+            tools_conf["allow"] = [str(item).strip() for item in allow_tools if str(item).strip()]
+        existing["tools"] = tools_conf
+
+        agent_conf = existing.get("agent")
+        if not isinstance(agent_conf, dict):
+            agent_conf = {}
+        agent_behavior = agent_conf.get("behavior")
+        if not isinstance(agent_behavior, dict):
+            agent_behavior = {}
+        for key in ("reasoning_effort", "approvals_mode", "message"):
+            value = behavior.get(key)
+            if isinstance(value, str) and value.strip():
+                agent_behavior[key] = value.strip()
+        agent_conf["behavior"] = agent_behavior
+        existing["agent"] = agent_conf
+
+        config_path.write_text(
+            yaml.safe_dump(existing, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        context["config"] = existing
+        return "config.yaml written"
+
+    def _setup_step_config_validate_yaml(self, context: dict[str, Any]) -> str:
+        profile_home = Path(str(context["profile_home"]))
+        config_path = profile_home / "config.yaml"
+        loaded = yaml.safe_load(config_path.read_text(encoding="utf-8", errors="replace")) or {}
+        if not isinstance(loaded, dict):
+            raise ValueError("config.yaml must be a mapping object")
+        context["config"] = loaded
+        return "config.yaml validated"
+
+    def _setup_step_env_write_file(self, context: dict[str, Any]) -> str:
+        profile_home = Path(str(context["profile_home"]))
+        env_path = profile_home / ".env"
+        inputs = context.get("inputs") if isinstance(context.get("inputs"), dict) else {}
+        env_values = inputs.get("env") if isinstance(inputs.get("env"), dict) else {}
+
+        lines = _read_env_lines(env_path)
+        merged: dict[str, str] = {}
+        for key, value, _orig in lines:
+            if key and value is not None:
+                merged[key] = value
+        for key, value in env_values.items():
+            if isinstance(key, str) and key.strip():
+                merged[key.strip()] = str(value)
+        with env_path.open("w", encoding="utf-8") as fh:
+            for key in sorted(merged.keys()):
+                fh.write(f"{key}={merged[key]}\n")
+        return f".env written ({len(merged)} keys)"
+
+    def _setup_step_env_validate_required_keys(self, context: dict[str, Any]) -> str:
+        profile_home = Path(str(context["profile_home"]))
+        env_path = profile_home / ".env"
+        env_lines = _read_env_lines(env_path)
+        env_keys = {key for key, value, _orig in env_lines if key and value is not None and value != ""}
+        config = context.get("config") if isinstance(context.get("config"), dict) else {}
+        provider = _extract_provider_from_config(config)
+        if not provider:
+            return "provider not set; env required key check skipped"
+        provider_meta = _provider_setup_metadata(provider, hermes_home=str(self.config.hermes_home))
+        required_keys = provider_meta.get("required_env_keys", []) if isinstance(provider_meta, dict) else []
+        if required_keys:
+            for required_key in required_keys:
+                if required_key not in env_keys:
+                    raise ValueError(f"Missing required env key for provider '{provider}': {required_key}")
+        return f"env validated ({len(env_keys)} keys, provider={provider})"
+
+    def _setup_step_soul_write_file(self, context: dict[str, Any]) -> str:
+        profile_home = Path(str(context["profile_home"]))
+        soul_path = profile_home / "SOUL.md"
+        inputs = context.get("inputs") if isinstance(context.get("inputs"), dict) else {}
+        soul_override = inputs.get("soul_md")
+        if isinstance(soul_override, str):
+            soul_path.write_text(soul_override, encoding="utf-8")
+            return "SOUL.md written from payload"
+        if soul_path.exists():
+            return "SOUL.md kept existing"
+        soul_path.write_text("# SOUL\n\nDescribe this profile's behavior.\n", encoding="utf-8")
+        return "SOUL.md initialized"
+
+    def _setup_step_provider_validate(self, context: dict[str, Any]) -> str:
+        config = context.get("config") if isinstance(context.get("config"), dict) else {}
+        provider = _extract_provider_from_config(config)
+        if not provider:
+            raise ValueError("Provider is required in config.yaml (model.provider)")
+        return f"provider validated ({provider})"
+
+    def _setup_step_terminal_validate(self, context: dict[str, Any]) -> str:
+        config = context.get("config") if isinstance(context.get("config"), dict) else {}
+        terminal = config.get("terminal") if isinstance(config.get("terminal"), dict) else {}
+        cwd_value = terminal.get("cwd") if isinstance(terminal, dict) else "."
+        if not isinstance(cwd_value, str) or not cwd_value.strip():
+            raise ValueError("terminal.cwd must be a non-empty string")
+        profile_home = Path(str(context["profile_home"]))
+        cwd_path = Path(cwd_value)
+        target = cwd_path if cwd_path.is_absolute() else profile_home / cwd_path
+        target.mkdir(parents=True, exist_ok=True)
+        return f"terminal cwd validated ({target})"
+
+    def _setup_step_gateway_validate(self, context: dict[str, Any]) -> str:
+        config = context.get("config") if isinstance(context.get("config"), dict) else {}
+        gateway = config.get("gateway") if isinstance(config.get("gateway"), dict) else {}
+        endpoint = gateway.get("endpoint") if isinstance(gateway, dict) else None
+        if endpoint is not None and not isinstance(endpoint, str):
+            raise ValueError("gateway.endpoint must be a string")
+        platforms = gateway.get("platforms") if isinstance(gateway, dict) else None
+        if platforms is not None and not isinstance(platforms, list):
+            raise ValueError("gateway.platforms must be an array")
+        if isinstance(platforms, list):
+            for item in platforms:
+                if not isinstance(item, str):
+                    raise ValueError("gateway.platforms entries must be strings")
+        return f"gateway validated ({endpoint if endpoint else 'default'}; {len(platforms) if isinstance(platforms, list) else 0} platforms)"
+
+    def _setup_step_tools_validate(self, context: dict[str, Any]) -> str:
+        config = context.get("config") if isinstance(context.get("config"), dict) else {}
+        tools = config.get("tools") if isinstance(config.get("tools"), dict) else {}
+        allow = tools.get("allow") if isinstance(tools, dict) else None
+        if allow is not None and not isinstance(allow, list):
+            raise ValueError("tools.allow must be an array")
+        if isinstance(allow, list):
+            for item in allow:
+                if not isinstance(item, str):
+                    raise ValueError("tools.allow entries must be strings")
+        return f"tools validated ({len(allow) if isinstance(allow, list) else 0} items)"
+
+    def _setup_step_agent_behavior_validate_finalize(self, context: dict[str, Any]) -> str:
+        config = context.get("config") if isinstance(context.get("config"), dict) else {}
+        agent = config.get("agent") if isinstance(config.get("agent"), dict) else {}
+        behavior = agent.get("behavior") if isinstance(agent, dict) else {}
+        if behavior is not None and not isinstance(behavior, dict):
+            raise ValueError("agent.behavior must be a mapping object")
+        profile_home = Path(str(context["profile_home"]))
+        for required in ("config.yaml", ".env", "SOUL.md"):
+            if not (profile_home / required).exists():
+                raise ValueError(f"Missing required setup file: {required}")
+        return "agent behavior validated; setup finalized"
+
     def resolve_profile_home(self, payload: dict[str, Any]) -> str:
         explicit_home = payload.get("profile_home")
         if explicit_home:
@@ -673,9 +1152,145 @@ class CommandRunner:
 
 
 # ── module-level helpers ──────────────────────────────────────────────
+def _provider_setup_metadata(provider_id: str, *, hermes_home: str | None = None) -> dict[str, Any]:
+    prepare_hermes_imports(hermes_home)
+
+    provider_key = str(provider_id or "").strip()
+    if not provider_key:
+        return {
+            "id": "",
+            "label": "",
+            "auth_type": "api_key",
+            "required_env_keys": [],
+            "optional_env_keys": [],
+            "base_url": "",
+            "base_url_env_var": "",
+            "models": [],
+        }
+
+    required_env_keys: list[str] = []
+    optional_env_keys: list[str] = []
+    auth_type = "api_key"
+    label = provider_key
+    base_url = ""
+    base_url_env_var = ""
+    models: list[str] = []
+
+    try:
+        from hermes_cli.auth import PROVIDER_REGISTRY  # type: ignore[import-not-found]
+
+        reg = PROVIDER_REGISTRY.get(provider_key)
+        if reg is not None:
+            label = str(getattr(reg, "name", "") or label)
+            auth_type = str(getattr(reg, "auth_type", "") or auth_type)
+            base_url = str(getattr(reg, "inference_base_url", "") or base_url)
+            base_url_env_var = str(getattr(reg, "base_url_env_var", "") or base_url_env_var)
+            env_vars = [str(item).strip() for item in getattr(reg, "api_key_env_vars", ()) if str(item).strip()]
+            if auth_type == "api_key":
+                required_env_keys = env_vars
+            else:
+                optional_env_keys = env_vars
+    except Exception:
+        pass
+
+    try:
+        from hermes_cli.providers import get_provider  # type: ignore[import-not-found]
+
+        pdef = get_provider(provider_key)
+        if pdef is not None and str(getattr(pdef, "id", "") or "") == provider_key:
+            label = str(getattr(pdef, "name", "") or label)
+            auth_type = str(getattr(pdef, "auth_type", "") or auth_type)
+            base_url = str(getattr(pdef, "base_url", "") or base_url)
+            base_url_env_var = str(getattr(pdef, "base_url_env_var", "") or base_url_env_var)
+            env_vars = [str(item).strip() for item in getattr(pdef, "api_key_env_vars", ()) if str(item).strip()]
+            if auth_type == "api_key":
+                if not required_env_keys:
+                    required_env_keys = env_vars
+                else:
+                    required_env_keys = list(dict.fromkeys(required_env_keys + env_vars))
+            elif not optional_env_keys:
+                optional_env_keys = env_vars
+    except Exception:
+        pass
+
+    try:
+        from agent.models_dev import get_provider_info  # type: ignore[import-not-found]
+
+        pinfo = get_provider_info(provider_key)
+        if pinfo is not None:
+            label = str(getattr(pinfo, "name", "") or label)
+            base_url = str(getattr(pinfo, "api", "") or base_url)
+            if not required_env_keys and auth_type == "api_key":
+                required_env_keys = [str(item).strip() for item in getattr(pinfo, "env", ()) if str(item).strip()]
+    except Exception:
+        pass
+
+    try:
+        from hermes_cli.models import _PROVIDER_MODELS  # type: ignore[import-not-found]
+
+        models = [str(item).strip() for item in _PROVIDER_MODELS.get(provider_key, []) if str(item).strip()]
+    except Exception:
+        models = []
+
+    return {
+        "id": provider_key,
+        "label": label,
+        "auth_type": auth_type,
+        "required_env_keys": required_env_keys,
+        "optional_env_keys": optional_env_keys,
+        "base_url": base_url,
+        "base_url_env_var": base_url_env_var,
+        "models": models,
+    }
+
+
+def _load_setup_catalog(hermes_home: str | None = None) -> list[dict[str, Any]]:
+    prepare_hermes_imports(hermes_home)
+
+    provider_ids: list[str] = []
+
+    try:
+        from hermes_cli.models import _PROVIDER_MODELS  # type: ignore[import-not-found]
+
+        provider_ids.extend(str(item).strip() for item in _PROVIDER_MODELS.keys() if str(item).strip())
+    except Exception:
+        pass
+
+    try:
+        from hermes_cli.auth import PROVIDER_REGISTRY  # type: ignore[import-not-found]
+
+        for key, value in PROVIDER_REGISTRY.items():
+            canonical = str(getattr(value, "id", "") or "").strip()
+            key_name = str(key or "").strip()
+            if canonical and key_name == canonical:
+                provider_ids.append(key_name)
+    except Exception:
+        pass
+
+    seen: set[str] = set()
+    ordered_ids: list[str] = []
+    for provider_id in provider_ids:
+        if provider_id in seen:
+            continue
+        seen.add(provider_id)
+        ordered_ids.append(provider_id)
+
+    catalog = [_provider_setup_metadata(provider_id, hermes_home=hermes_home) for provider_id in ordered_ids]
+    catalog.sort(key=lambda item: str(item.get("label") or item.get("id") or "").lower())
+    return catalog
 
 
 def success_result(result: Any, started_at: str) -> dict[str, Any]:
+    if isinstance(result, dict) and isinstance(result.get("returncode"), int) and result["returncode"] != 0:
+        return {
+            "status": "failed",
+            "stdout": sanitize_text(str(result.get("stdout") or "")),
+            "stderr": sanitize_text(str(result.get("stderr") or "")),
+            "error": f"Command exited with returncode {result['returncode']}",
+            "result": result,
+            "started_at": started_at,
+            "finished_at": now_iso(),
+        }
     return {
         "status": "success",
         "stdout": "",
@@ -697,6 +1312,18 @@ def failed_result(error: str, started_at: str) -> dict[str, Any]:
     }
 
 
+def _extract_provider_from_config(config: dict[str, Any]) -> str | None:
+    model = config.get("model")
+    if isinstance(model, dict):
+        value = model.get("provider")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    provider = config.get("provider")
+    if isinstance(provider, str) and provider.strip():
+        return provider.strip()
+    return None
+
+
 def derive_gateway_status(gateway: Any) -> str:
     if not isinstance(gateway, dict):
         return "unknown"
@@ -716,6 +1343,18 @@ def derive_gateway_status(gateway: Any) -> str:
 # ── .env file helpers ─────────────────────────────────────────────────
 
 _ENV_RE = re.compile(r'^\s*(?:export\s+)?(\w+)\s*=\s*(.*?)\s*$')
+_SECRET_REDACTIONS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r'((?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|AUTH[_-]?TOKEN)\s*[=:]\s*)\S+', re.IGNORECASE), r"\1***REDACTED***"),
+    (re.compile(r"sk-[a-zA-Z0-9_-]{20,}"), "***REDACTED***"),
+    (re.compile(r"Bearer\s+[a-zA-Z0-9\-_.]+", re.IGNORECASE), "Bearer ***REDACTED***"),
+]
+
+
+def sanitize_text(value: str) -> str:
+    sanitized = value
+    for pattern, replacement in _SECRET_REDACTIONS:
+        sanitized = pattern.sub(replacement, sanitized)
+    return sanitized
 
 
 def validate_profile_name(value: Any, field_name: str) -> str:

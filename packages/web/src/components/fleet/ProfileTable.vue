@@ -16,7 +16,7 @@ const { profiles, isLoadingProfiles, profilesError } = storeToRefs(hubStore)
 
 const filteredProfiles = computed(() => {
   if (!props.filterNodeId) return profiles.value
-  return profiles.value.filter((p) => p.desc === props.filterNodeId)
+  return profiles.value.filter((p) => p.nodeId === props.filterNodeId)
 })
 
 const rowBusyId = ref<string | null>(null)
@@ -29,6 +29,14 @@ const anyBusy = computed(() => rowBusyId.value !== null)
 
 function openProfile(profile: ProfileRow): void {
   void router.push(`/profiles/${profile.id}`)
+}
+
+function openSetup(profile: ProfileRow): void {
+  void router.push({
+    name: 'profileSetup',
+    params: { id: profile.id },
+    query: { mode: 'repair' },
+  })
 }
 
 function openProfileLogs(profile: ProfileRow): void {
@@ -138,7 +146,7 @@ async function deleteAgent(profile: ProfileRow): Promise<void> {
                 <div class="grid size-[38px] place-items-center rounded-md border border-signal/25 bg-signal/10 font-black text-signal">{{ profile.letter }}</div>
                 <div class="min-w-0 flex-1">
                   <div class="font-black text-snow">{{ profile.name }}</div>
-                  <div class="mt-0.5 text-xs text-slate">{{ profile.desc }}</div>
+                  <div class="mt-0.5 text-xs text-slate">{{ profile.nodeLabel }}</div>
                   <div v-if="rowError[profile.id]" class="mt-1 text-xs text-danger">{{ rowError[profile.id] }}</div>
                 </div>
               </div>
@@ -156,6 +164,14 @@ async function deleteAgent(profile: ProfileRow): Promise<void> {
             <td class="border-b border-snow/10 px-[18px] py-[15px]">
               <div class="flex flex-wrap gap-1.5">
                 <button class="min-h-[34px] rounded-md border border-snow/10 bg-snow/[.055] px-2.5 text-xs font-bold text-snow transition hover:bg-snow/[.09]" type="button" @click="openProfileLogs(profile)" v-show="false">Logs</button>
+                <button
+                  class="min-h-[34px] rounded-md border border-snow/10 bg-snow/[.055] px-2.5 text-xs font-bold text-snow transition hover:bg-snow/[.09]"
+                  type="button"
+                  :disabled="rowBusyId === profile.id"
+                  @click="openSetup(profile)"
+                >
+                  Setup
+                </button>
                 <button
                   class="min-h-[34px] rounded-md border border-snow/10 bg-snow/[.055] px-2.5 text-xs font-bold text-snow transition hover:bg-snow/[.09]"
                   type="button"

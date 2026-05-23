@@ -124,7 +124,7 @@ def build_register_payload(config: AgentConfig) -> dict[str, Any]:
         },
         "capabilities": {
             "profiles": True,
-            "setup": False,
+            "setup": True,
             "gateway": True,
             "logs": True,
             "sessions": True,
@@ -133,7 +133,7 @@ def build_register_payload(config: AgentConfig) -> dict[str, Any]:
             "soul": True,
             "config": True,
             "env": True,
-            "write_actions": False,
+            "write_actions": True,
         },
         "tags": config.tags,
         "profiles": profiles,

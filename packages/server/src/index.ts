@@ -7,14 +7,31 @@ import type {
   CommandResultRequest,
   CommandType,
   CreateCommandRequest,
+  ConfigReadResult,
+  EnvStatusResult,
+  GatewayStatusResult,
   HubCommand,
   HubAgentHeartbeatRequest,
   HubAgentRegisterRequest,
   HubNode,
   ManagedAgent,
+  ProfileScanResult,
+  QueryChannelClientMessage,
+  QueryChannelHello,
+  QueryChannelRequest,
+  QueryChannelResponse,
+  QueryEnvelope,
+  ReadQueryType,
+  SessionsListResult,
+  SkillsListResult,
+  SoulReadResult,
+  SetupCatalogResult,
+  SetupRunPayload,
+  SetupStep,
 } from '@hermes-hub/protocol'
+import { SETUP_STEP_ORDER } from '@hermes-hub/protocol'
 import type Database from 'better-sqlite3'
-import { handleUpgrade, wsBroadcast } from './websocket.js'
+import { handleUpgrade, type WsConnection, wsBroadcast, wsClients } from './websocket.js'
 import {
   initDatabase,
   getNode,
@@ -32,6 +49,10 @@ import {
   getCommand,
   getAllCommands,
   upsertCommand,
+  getQueryCache,
+  upsertQueryCache,
+  deleteQueryCacheByAgentAndTypes,
+  deleteQueryCacheByNodeAndTypes,
   getNextCommandNumber,
   getRunningCommandsForNode,
   getBusyAgentIds,
@@ -41,6 +62,7 @@ import {
   getLogsForNode,
   getLogsForCommand,
   insertLog,
+  sanitizeMessage,
   getMetadataValue,
   setMetadataValue,
   createUser,
@@ -113,6 +135,105 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+function isSetupStep(value: unknown): value is SetupStep {
+  return typeof value === 'string' && (SETUP_STEP_ORDER as readonly string[]).includes(value)
+}
+
+function parseSetupPayload(body: unknown): SetupRunPayload {
+  if (!isObject(body)) return { mode: 'create_flow' }
+  const payload: SetupRunPayload = {
+    mode: body.mode === 'repair' ? 'repair' : 'create_flow',
+  }
+  if (isSetupStep(body.resume_from_step)) {
+    payload.resume_from_step = body.resume_from_step
+  }
+  if (isObject(body.inputs)) {
+    payload.inputs = body.inputs as SetupRunPayload['inputs']
+  }
+  if (typeof body.profile_home === 'string' && body.profile_home.trim()) {
+    payload.profile_home = body.profile_home.trim()
+  }
+  return payload
+}
+
+const READ_QUERY_TYPES: readonly ReadQueryType[] = [
+  'profile.scan',
+  'gateway.status',
+  'setup.catalog',
+  'config.read',
+  'soul.read',
+  'env.status',
+  'skills.list',
+  'sessions.list',
+] as const
+
+const QUERY_TIMEOUT_MS = 5_000
+const QUERY_CACHE_TTLS_MS: Partial<Record<ReadQueryType, number>> = {
+  'setup.catalog': 10 * 60_000,
+  'skills.list': 30_000,
+  'sessions.list': 30_000,
+  'gateway.status': 15_000,
+}
+
+type QueryResponseData =
+  | ProfileScanResult
+  | GatewayStatusResult
+  | SetupCatalogResult
+  | ConfigReadResult
+  | SoulReadResult
+  | EnvStatusResult
+  | SkillsListResult
+  | SessionsListResult
+
+interface QuerySession {
+  nodeId: string
+  connection: WsConnection
+  pending: Map<string, {
+    resolve: (value: QueryChannelResponse) => void
+    reject: (error: Error) => void
+    timer: ReturnType<typeof setTimeout>
+  }>
+  lastPongAt: string
+}
+
+const querySessions = new Map<string, QuerySession>()
+
+function isReadQueryType(value: unknown): value is ReadQueryType {
+  return typeof value === 'string' && (READ_QUERY_TYPES as readonly string[]).includes(value)
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(',')}]`
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right))
+    return `{${entries.map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function queryCacheKey(nodeId: string, agentId: string | undefined, queryType: ReadQueryType, payload: Record<string, unknown>): string {
+  return `${nodeId}::${agentId ?? '__node__'}::${queryType}::${stableStringify(payload)}`
+}
+
+function isNodeOnline(db: Database.Database, nodeId: string): boolean {
+  return getNode(db, nodeId)?.status === 'online'
+}
+
+function buildQueryEnvelope<T extends QueryResponseData>(
+  data: T,
+  meta: QueryEnvelope<T>['meta'],
+): QueryEnvelope<T> {
+  return { data, meta }
+}
+
+function cacheStillFresh(queryType: ReadQueryType, cachedAt: string): boolean {
+  const ttl = QUERY_CACHE_TTLS_MS[queryType]
+  if (!ttl) return true
+  return Date.now() - new Date(cachedAt).getTime() <= ttl
+}
+
 function stringArrayFromFlags(flags: Record<string, boolean> | undefined): string[] {
   if (!flags) return []
   return Object.entries(flags)
@@ -147,7 +268,7 @@ function isCommandType(value: unknown): value is CommandType {
   return (
     value === 'profile.scan' || value === 'profile.create' || value === 'profile.rename' || value === 'profile.delete' ||
     value === 'gateway.start' || value === 'gateway.stop' || value === 'gateway.restart' || value === 'gateway.status' ||
-    value === 'doctor.run' || value === 'setup.run' ||
+    value === 'doctor.run' || value === 'setup.run' || value === 'setup.catalog' ||
     value === 'logs.tail' ||
     value === 'config.read' || value === 'config.patch' ||
     value === 'soul.read' || value === 'soul.update' ||
@@ -166,8 +287,34 @@ function validateCreateCommandBody(body: unknown): CreateCommandRequest | null {
 
 function validateCommandResultBody(body: unknown): CommandResultRequest | null {
   if (!isObject(body)) return null
-  if (body.status !== 'success' && body.status !== 'failed') return null
+  if (
+    body.status !== 'running' &&
+    body.status !== 'success' &&
+    body.status !== 'failed' &&
+    body.status !== 'timeout' &&
+    body.status !== 'cancelled'
+  ) {
+    return null
+  }
+  if (body.result !== undefined && !isObject(body.result)) return null
   return body as unknown as CommandResultRequest
+}
+
+function isTerminalCommandStatus(status: HubCommand['status']): boolean {
+  return status === 'success' || status === 'failed' || status === 'timeout' || status === 'cancelled'
+}
+
+function normalizeReportedStatus(resultBody: CommandResultRequest): CommandResultRequest {
+  if (resultBody.status !== 'success') return resultBody
+  const returncode = resultBody.result && typeof resultBody.result.returncode === 'number'
+    ? resultBody.result.returncode
+    : undefined
+  if (returncode === undefined || returncode === 0) return resultBody
+  return {
+    ...resultBody,
+    status: 'failed',
+    error: resultBody.error ?? `Command exited with returncode ${returncode}`,
+  }
 }
 
 // 从数据库查找第一个 online node，用于没有明确 target node 的命令
@@ -183,7 +330,11 @@ function createCommand(
   body: CreateCommandRequest
 ): { ok: true; command: HubCommand } | { ok: false; error: string } {
   const agent = body.agentId ? getAgent(db, body.agentId) : undefined
-  const nodeId = body.nodeId ?? agent?.nodeId ?? chooseDefaultNodeId(db)
+  const cloneFromAgentIdRaw = body.type === 'profile.create' && typeof body.payload?.clone_from_agent_id === 'string'
+    ? body.payload.clone_from_agent_id.trim()
+    : ''
+  const cloneFromAgent = cloneFromAgentIdRaw ? getAgent(db, cloneFromAgentIdRaw) : undefined
+  const nodeId = body.nodeId ?? agent?.nodeId ?? cloneFromAgent?.nodeId ?? chooseDefaultNodeId(db)
   if (!nodeId) return { ok: false, error: 'No registered node is available' }
   if (!getNode(db, nodeId)) return { ok: false, error: `Node '${nodeId}' not found` }
 
@@ -196,6 +347,12 @@ function createCommand(
   if (body.type === 'profile.create') {
     const name = typeof body.payload?.profile_name === 'string' ? body.payload.profile_name.trim() : ''
     if (!name) return { ok: false, error: 'profile.create requires payload.profile_name' }
+    if (cloneFromAgentIdRaw) {
+      if (!cloneFromAgent) return { ok: false, error: `Clone source agent '${cloneFromAgentIdRaw}' not found` }
+      if (cloneFromAgent.nodeId !== nodeId) {
+        return { ok: false, error: 'Clone source must be on the same node as the new agent' }
+      }
+    }
   }
   if (body.type === 'profile.rename') {
     const nextName = typeof body.payload?.new_name === 'string' ? body.payload.new_name.trim() : ''
@@ -203,7 +360,7 @@ function createCommand(
   }
   // gateway/doctor/setup 需要 agent 来确定操作的 profile
   if (
-    (body.type.startsWith('gateway.') || body.type === 'doctor.run' || body.type === 'setup.run') &&
+    (body.type.startsWith('gateway.') || body.type === 'doctor.run' || body.type === 'setup.run' || body.type === 'setup.catalog') &&
     !agent
   ) {
     return { ok: false, error: `${body.type} requires a valid agentId` }
@@ -215,6 +372,14 @@ function createCommand(
     typeof body.payload?.timeoutSeconds === 'number'
       ? (body.payload as Record<string, number>).timeoutSeconds
       : 300
+  const commandPayload: Record<string, unknown> = {
+    ...(body.payload ?? {}),
+  }
+  if (body.type === 'profile.create' && cloneFromAgent) {
+    commandPayload.clone_from_agent_id = cloneFromAgent.id
+    commandPayload.clone_from_profile_home = cloneFromAgent.profileHome
+    commandPayload.clone_from_profile_name = cloneFromAgent.profileName
+  }
   // 使用数据库原子计数器生成命令 ID
   const commandNum = getNextCommandNumber(db)
   const command: HubCommand = {
@@ -223,7 +388,7 @@ function createCommand(
     agentId: body.agentId,
     type: body.type,
     payload: {
-      ...(body.payload ?? {}),
+      ...commandPayload,
       ...(agent ? { profile_name: agent.profileName, profile_home: agent.profileHome } : {}),
     },
     status: 'pending',
@@ -418,6 +583,8 @@ function profileCompat(agent: ManagedAgent) {
     letter: name[0]?.toUpperCase() ?? '?',
     name,
     desc: agent.nodeId,
+    nodeId: agent.nodeId,
+    nodeLabel: agent.nodeId,
     setupTone: mapAgentStatusToTone(agent.setupStatus),
     setupText: agent.setupStatus,
     gatewayTone: mapAgentStatusToTone(agent.gatewayStatus),
@@ -519,6 +686,10 @@ function hasAnyNodeVkey(db: Database.Database): boolean {
 
 function validateHubAgentVkey(db: Database.Database, nodeId: string, req: IncomingMessage): boolean {
   const vkey = extractHubAgentVkey(req)
+  return validateHubAgentVkeyValue(db, nodeId, vkey)
+}
+
+function validateHubAgentVkeyValue(db: Database.Database, nodeId: string, vkey: string | null | undefined): boolean {
   const nodeVkey = dbGetNodeVkey(db, nodeId)
   if (nodeVkey) {
     return vkey === nodeVkey
@@ -542,12 +713,245 @@ function notifyCommandUpdated(command: HubCommand): void {
   wsBroadcast(JSON.stringify({ event: 'command.updated', command }))
 }
 
+function clearQuerySession(session: QuerySession): void {
+  const current = querySessions.get(session.nodeId)
+  if (current !== session) return
+  for (const pending of session.pending.values()) {
+    clearTimeout(pending.timer)
+    pending.reject(new Error(`Query channel closed for node '${session.nodeId}'`))
+  }
+  session.pending.clear()
+  querySessions.delete(session.nodeId)
+}
+
+function registerQuerySession(session: QuerySession): void {
+  const previous = querySessions.get(session.nodeId)
+  if (previous && previous !== session) {
+    clearQuerySession(previous)
+    previous.connection.close()
+  }
+  querySessions.set(session.nodeId, session)
+}
+
+function bindQueryChannel(
+  db: Database.Database,
+  connection: WsConnection,
+): {
+  onText: (payload: string) => void
+  onClose: () => void
+} {
+  let session: QuerySession | null = null
+
+  return {
+    onText(payload) {
+      let message: QueryChannelClientMessage
+      try {
+        message = JSON.parse(payload) as QueryChannelClientMessage
+      } catch {
+        connection.close()
+        return
+      }
+
+      if (!session) {
+        const hello = message as Partial<QueryChannelHello>
+        if (hello.kind !== 'query.hello' || typeof hello.node_id !== 'string') {
+          connection.close()
+          return
+        }
+        const vkey = typeof hello.vkey === 'string' ? hello.vkey.trim() : extractHubAgentVkey(connection.req)
+        if (!validateHubAgentVkeyValue(db, hello.node_id, vkey)) {
+          connection.close()
+          return
+        }
+        if (!getNode(db, hello.node_id)) {
+          connection.close()
+          return
+        }
+        session = {
+          nodeId: hello.node_id,
+          connection,
+          pending: new Map(),
+          lastPongAt: nowIso(),
+        }
+        registerQuerySession(session)
+        return
+      }
+
+      if (message.kind === 'query.pong') {
+        session.lastPongAt = typeof message.sent_at === 'string' ? message.sent_at : nowIso()
+        return
+      }
+
+      if (message.kind !== 'query.response') return
+      const pending = session.pending.get(message.request_id)
+      if (!pending) return
+      clearTimeout(pending.timer)
+      session.pending.delete(message.request_id)
+      pending.resolve(message)
+    },
+    onClose() {
+      if (session) clearQuerySession(session)
+    },
+  }
+}
+
+function invalidateReadCachesForCommand(db: Database.Database, command: HubCommand, status: HubCommand['status']): void {
+  const nodeId = command.nodeId
+  const agentId = command.agentId
+  switch (command.type) {
+    case 'config.patch':
+      if (status !== 'success') return
+      if (agentId) deleteQueryCacheByAgentAndTypes(db, nodeId, agentId, ['config.read'])
+      return
+    case 'env.set':
+    case 'env.delete':
+      if (status !== 'success') return
+      if (agentId) deleteQueryCacheByAgentAndTypes(db, nodeId, agentId, ['env.status'])
+      return
+    case 'soul.update':
+      if (status !== 'success') return
+      if (agentId) deleteQueryCacheByAgentAndTypes(db, nodeId, agentId, ['soul.read'])
+      return
+    case 'setup.run':
+      if (agentId) deleteQueryCacheByAgentAndTypes(db, nodeId, agentId, ['config.read', 'env.status', 'soul.read', 'gateway.status', 'skills.list', 'sessions.list'])
+      deleteQueryCacheByNodeAndTypes(db, nodeId, ['setup.catalog'])
+      return
+    case 'profile.create':
+    case 'profile.rename':
+    case 'profile.delete':
+      if (status !== 'success') return
+      deleteQueryCacheByNodeAndTypes(db, nodeId, ['setup.catalog', 'profile.scan'])
+      if (agentId) {
+        deleteQueryCacheByAgentAndTypes(db, nodeId, agentId, ['config.read', 'env.status', 'soul.read', 'gateway.status', 'skills.list', 'sessions.list'])
+      }
+      return
+  }
+}
+
+async function executeReadQuery<T extends QueryResponseData>(
+  db: Database.Database,
+  args: {
+    nodeId: string
+    agentId?: string
+    queryType: ReadQueryType
+    payload?: Record<string, unknown>
+  },
+): Promise<{ status: number; body: { ok: boolean; data?: QueryEnvelope<T>; error?: string } }> {
+  const payload = args.payload ?? {}
+  const cacheKey = queryCacheKey(args.nodeId, args.agentId, args.queryType, payload)
+  const cached = getQueryCache(db, cacheKey)
+  const nodeOnline = isNodeOnline(db, args.nodeId)
+  const session = querySessions.get(args.nodeId)
+
+  if (session) {
+    const requestId = `qry_${randomUUID()}`
+    const request: QueryChannelRequest = {
+      kind: 'query.request',
+      request_id: requestId,
+      query_type: args.queryType,
+      agent_id: args.agentId,
+      payload,
+      deadline_ms: QUERY_TIMEOUT_MS,
+    }
+    const liveResponse = await new Promise<QueryChannelResponse>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        session.pending.delete(requestId)
+        reject(new Error(`Query '${args.queryType}' timed out`))
+      }, QUERY_TIMEOUT_MS)
+      session.pending.set(requestId, { resolve, reject, timer })
+      try {
+        session.connection.sendText(JSON.stringify(request))
+      } catch (error) {
+        clearTimeout(timer)
+        session.pending.delete(requestId)
+        reject(error instanceof Error ? error : new Error('Failed to send query request'))
+      }
+    }).catch((error: Error) => ({ kind: 'query.response', request_id: requestId, ok: false, error: error.message } satisfies QueryChannelResponse))
+
+    if (liveResponse.ok && liveResponse.data) {
+      const timestamp = nowIso()
+      upsertQueryCache(db, {
+        cacheKey,
+        nodeId: args.nodeId,
+        agentId: args.agentId,
+        queryType: args.queryType,
+        payloadKey: stableStringify(payload),
+        data: liveResponse.data,
+        updatedAt: timestamp,
+      })
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          data: buildQueryEnvelope(liveResponse.data as T, {
+            source: 'live',
+            stale: false,
+            cached_at: timestamp,
+            node_online: true,
+          }),
+        },
+      }
+    }
+  }
+
+  if (cached && cacheStillFresh(args.queryType, cached.updatedAt)) {
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        data: buildQueryEnvelope(cached.data as T, {
+          source: 'cache',
+          stale: true,
+          cached_at: cached.updatedAt,
+          node_online: nodeOnline,
+        }),
+      },
+    }
+  }
+
+  return {
+    status: nodeOnline ? 504 : 502,
+    body: {
+      ok: false,
+      error: nodeOnline
+        ? `Query '${args.queryType}' timed out for node '${args.nodeId}'`
+        : `Node '${args.nodeId}' is offline and no cached '${args.queryType}' result is available`,
+    },
+  }
+}
+
 function requestHubUrl(req: IncomingMessage): string {
   const forwardedProto = headerValue(req.headers['x-forwarded-proto'])
   const proto = forwardedProto?.split(',')[0]?.trim() || 'http'
   const forwardedHost = headerValue(req.headers['x-forwarded-host'])
   const host = forwardedHost?.split(',')[0]?.trim() || req.headers.host || `localhost:${serverPort}`
   return `${proto}://${host}`
+}
+
+async function replyReadQueryForAgent<T extends QueryResponseData>(
+  db: Database.Database,
+  res: ServerResponse,
+  agentId: string,
+  queryType: ReadQueryType,
+  payload: Record<string, unknown> = {},
+): Promise<boolean> {
+  const agent = getAgent(db, agentId)
+  if (!agent) {
+    jsonReply(res, 404, { ok: false, error: `Agent '${agentId}' not found` })
+    return true
+  }
+  const result = await executeReadQuery<T>(db, {
+    nodeId: agent.nodeId,
+    agentId,
+    queryType,
+    payload: {
+      ...payload,
+      profile_name: agent.profileName,
+      profile_home: agent.profileHome,
+    },
+  })
+  jsonReply(res, result.status, result.body)
+  return true
 }
 
 function hubAgentCommand(req: IncomingMessage, _nodeId: string, vkey: string): string {
@@ -830,21 +1234,24 @@ async function handleHubAgentApi(
       jsonReply(res, 400, { ok: false, error: 'Invalid JSON body' })
       return true
     }
-    const resultBody = validateCommandResultBody(body)
-    if (!resultBody) {
+    const parsedBody = validateCommandResultBody(body)
+    if (!parsedBody) {
       jsonReply(res, 400, { ok: false, error: 'Invalid command result payload' })
       return true
     }
+    const resultBody = normalizeReportedStatus(parsedBody)
 
     const timestamp = nowIso()
     command.status = resultBody.status
-    command.stdout = resultBody.stdout
-    command.stderr = resultBody.stderr
+    command.stdout = resultBody.stdout ? sanitizeMessage(resultBody.stdout) : undefined
+    command.stderr = resultBody.stderr ? sanitizeMessage(resultBody.stderr) : undefined
     command.error = resultBody.error
+    command.result = resultBody.result
     command.startedAt = command.startedAt ?? resultBody.started_at
-    command.finishedAt = resultBody.finished_at ?? timestamp
+    command.finishedAt = isTerminalCommandStatus(resultBody.status) ? (resultBody.finished_at ?? timestamp) : undefined
     command.updatedAt = timestamp
     upsertCommand(db, command)
+    invalidateReadCachesForCommand(db, command, resultBody.status)
     notifyCommandUpdated(command);
     jsonReply(res, 200, { ok: true, data: command })
     return true
@@ -1254,7 +1661,7 @@ async function handlePublicApi(
         payload: {
           profile_name: name,
           clone_mode: typeof body.cloneMode === 'string' ? body.cloneMode : 'blank',
-          clone_from: typeof body.cloneFrom === 'string' ? body.cloneFrom : undefined,
+          clone_from_agent_id: typeof body.cloneFrom === 'string' ? body.cloneFrom : undefined,
           no_alias: body.noAlias === true,
         },
       })
@@ -1335,11 +1742,17 @@ async function handlePublicApi(
     if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
     let setupBody: unknown = {}
     try { setupBody = await readJsonBody(req) } catch { /* 允许空 body */ }
-    const section = isObject(setupBody) && typeof setupBody.section === 'string' ? setupBody.section : 'all'
-    const result = createCommand(db, { agentId: decodeURIComponent(setupMatch[1]), type: 'setup.run', payload: { section } })
+    const setupPayload = parseSetupPayload(setupBody)
+    const result = createCommand(db, { agentId: decodeURIComponent(setupMatch[1]), type: 'setup.run', payload: setupPayload as unknown as Record<string, unknown> })
     if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
     jsonReply(res, 202, { ok: true, data: result.command })
     return true
+  }
+
+  const setupCatalogMatch = path.match(/^\/api\/profiles\/([^/]+)\/setup\/catalog$/)
+  if (setupCatalogMatch) {
+    if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    return replyReadQueryForAgent<SetupCatalogResult>(db, res, decodeURIComponent(setupCatalogMatch[1]), 'setup.catalog')
   }
 
   // Doctor route
@@ -1356,10 +1769,7 @@ async function handlePublicApi(
   const configReadMatch = path.match(/^\/api\/profiles\/([^/]+)\/config\/read$/)
   if (configReadMatch) {
     if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
-    const result = createCommand(db, { agentId: decodeURIComponent(configReadMatch[1]), type: 'config.read', payload: {} })
-    if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
-    jsonReply(res, 202, { ok: true, data: result.command })
-    return true
+    return replyReadQueryForAgent<ConfigReadResult>(db, res, decodeURIComponent(configReadMatch[1]), 'config.read')
   }
 
   const configWriteMatch = path.match(/^\/api\/profiles\/([^/]+)\/config\.yaml$/)
@@ -1378,10 +1788,7 @@ async function handlePublicApi(
   const soulReadMatch = path.match(/^\/api\/profiles\/([^/]+)\/soul\/read$/)
   if (soulReadMatch) {
     if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
-    const result = createCommand(db, { agentId: decodeURIComponent(soulReadMatch[1]), type: 'soul.read', payload: {} })
-    if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
-    jsonReply(res, 202, { ok: true, data: result.command })
-    return true
+    return replyReadQueryForAgent<SoulReadResult>(db, res, decodeURIComponent(soulReadMatch[1]), 'soul.read')
   }
 
   const soulWriteMatch = path.match(/^\/api\/profiles\/([^/]+)\/SOUL\.md$/)
@@ -1400,20 +1807,26 @@ async function handlePublicApi(
   const skillsReadMatch = path.match(/^\/api\/profiles\/([^/]+)\/skills\/read$/)
   if (skillsReadMatch) {
     if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
-    const result = createCommand(db, { agentId: decodeURIComponent(skillsReadMatch[1]), type: 'skills.list', payload: {} })
-    if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
-    jsonReply(res, 202, { ok: true, data: result.command })
-    return true
+    return replyReadQueryForAgent<SkillsListResult>(db, res, decodeURIComponent(skillsReadMatch[1]), 'skills.list')
+  }
+
+  const sessionsReadMatch = path.match(/^\/api\/profiles\/([^/]+)\/sessions\/read$/)
+  if (sessionsReadMatch) {
+    if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    return replyReadQueryForAgent<SessionsListResult>(db, res, decodeURIComponent(sessionsReadMatch[1]), 'sessions.list')
+  }
+
+  const gatewayStatusMatch = path.match(/^\/api\/profiles\/([^/]+)\/gateway\/status$/)
+  if (gatewayStatusMatch) {
+    if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
+    return replyReadQueryForAgent<GatewayStatusResult>(db, res, decodeURIComponent(gatewayStatusMatch[1]), 'gateway.status')
   }
 
   // Env routes (Phase 6)
   const envReadMatch = path.match(/^\/api\/profiles\/([^/]+)\/env\/read$/)
   if (envReadMatch) {
     if (method !== 'POST') { jsonReply(res, 405, { ok: false, error: 'Method not allowed' }); return true }
-    const result = createCommand(db, { agentId: decodeURIComponent(envReadMatch[1]), type: 'env.status', payload: {} })
-    if (!result.ok) { jsonReply(res, 400, { ok: false, error: result.error }); return true }
-    jsonReply(res, 202, { ok: true, data: result.command })
-    return true
+    return replyReadQueryForAgent<EnvStatusResult>(db, res, decodeURIComponent(envReadMatch[1]), 'env.status')
   }
 
   const envSetMatch = path.match(/^\/api\/profiles\/([^/]+)\/env$/)
@@ -1617,10 +2030,30 @@ export function startServer(opts: ServerOptions): ReturnType<typeof createServer
   // WebSocket upgrade (Phase 11 — command push)
   server.on('upgrade', (req, socket, head) => {
     if (req.url === '/ws') {
-      handleUpgrade(req, socket, head)
-    } else {
-      socket.destroy()
+      const connection = handleUpgrade(req, socket, head, {
+        onClose(conn) {
+          wsClients.delete(conn)
+        },
+      })
+      if (connection) wsClients.add(connection)
+      return
     }
+    if (req.url === '/ws/query-agent') {
+      let binding: ReturnType<typeof bindQueryChannel> | null = null
+      const connection = handleUpgrade(req, socket, head, {
+        onText(_connection, payload) {
+          binding?.onText(payload)
+        },
+        onClose() {
+          binding?.onClose()
+        },
+      })
+      if (connection) {
+        binding = bindQueryChannel(db, connection)
+      }
+      return
+    }
+    socket.destroy()
   })
 
   server.listen(opts.port, () => {

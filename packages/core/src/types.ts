@@ -10,7 +10,24 @@ export type {
   AgentSetupStatus,
   AgentRuntimeStatus,
   AgentApiStatus,
+  SetupRunPayload,
+  SetupRunResult,
+  ReadQueryType,
+  SetupCatalogResult,
+  SetupCatalogProvider,
+  QueryEnvelope,
+  QueryResultMeta,
+  ProfileScanResult,
+  ConfigReadResult,
+  SoulReadResult,
+  EnvStatusResult,
+  GatewayStatusResult,
+  SessionsListResult,
+  SkillsListResult,
+  SetupStep,
+  SetupStepResult,
 } from '@hermes-hub/protocol'
+export { SETUP_STEP_ORDER } from '@hermes-hub/protocol'
 
 export type {
   HubUser,
@@ -27,6 +44,8 @@ export interface ProfileRow {
   letter: string
   name: string
   desc: string
+  nodeId: string
+  nodeLabel: string
   setupTone: BadgeTone
   setupText: string
   gatewayTone: BadgeTone

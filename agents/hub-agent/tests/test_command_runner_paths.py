@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -19,6 +20,38 @@ def make_runner(hermes_home: Path) -> CommandRunner:
 
 
 class CommandRunnerPathBoundaryTests(unittest.TestCase):
+    def test_config_read_returns_raw_yaml_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_text = "model:\n  provider: openai\n  default: gpt-4.1\nterminal:\n  cwd: .\n"
+            (root / "config.yaml").write_text(config_text, encoding="utf-8")
+
+            runner = make_runner(root)
+            result = runner.command_config_read({"profile_home": str(root)})
+
+            self.assertEqual(result["config"], config_text)
+            self.assertEqual(result["provider"], "openai")
+            self.assertEqual(result["model"], "gpt-4.1")
+
+    def test_profile_create_can_clone_from_explicit_profile_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            root.mkdir(parents=True, exist_ok=True)
+            (root / "config.yaml").write_text("model:\n  provider: openai\n", encoding="utf-8")
+            (root / ".env").write_text("OPENAI_API_KEY=sk-test\n", encoding="utf-8")
+            (root / "SOUL.md").write_text("# SOUL\n", encoding="utf-8")
+
+            runner = make_runner(root)
+            result = runner.command_profile_create({
+                "profile_name": "writer",
+                "clone_from_profile_home": str(root),
+            })
+
+            self.assertTrue(result["created"])
+            self.assertTrue((root / "profiles" / "writer" / "config.yaml").exists())
+            self.assertTrue((root / "profiles" / "writer" / ".env").exists())
+            self.assertTrue((root / "profiles" / "writer" / "SOUL.md").exists())
+
     def test_explicit_profile_home_outside_configured_root_is_rejected_for_writes(self) -> None:
         root = Path("D:/aiproject/hermes-hub/.test-hermes")
         outside = root.parent / "outside"

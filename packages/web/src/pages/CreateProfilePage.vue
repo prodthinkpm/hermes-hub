@@ -9,49 +9,86 @@ import CommandBox from '@/components/ui/CommandBox.vue'
 
 type CloneMode = 'blank' | 'clone' | 'clone-all'
 
+interface CloneOption {
+  id: string
+  label: string
+  nodeId: string
+}
+
 const router = useRouter()
 const hubStore = useHubStore()
-const { profiles, isLoadingProfiles } = storeToRefs(hubStore)
+const { profiles, nodes, isLoadingProfiles } = storeToRefs(hubStore)
 
 const name = ref('')
+const nodeId = ref('')
 const cloneMode = ref<CloneMode>('blank')
-const cloneFrom = ref('')
+const cloneFromAgentId = ref('')
 const createAlias = ref(true)
 const creating = ref(false)
 const createError = ref<string | null>(null)
-const createdSteps = ref<string[]>([])
 const createdProfileId = ref<string | null>(null)
 
 const canChooseCloneSource = computed(() => cloneMode.value !== 'blank')
-const cloneOptions = computed(() => profiles.value.filter((p) => p.kind === 'profile').map((p) => p.name))
+const cloneOptions = computed<CloneOption[]>(() =>
+  profiles.value.map((profile) => ({
+    id: profile.id,
+    label: `${profile.nodeLabel} / ${profile.name}`,
+    nodeId: profile.nodeId,
+  })),
+)
+const selectedCloneOption = computed(() => cloneOptions.value.find((option) => option.id === cloneFromAgentId.value) ?? null)
+const hasMultipleNodes = computed(() => nodes.value.length > 1)
+const nodeMismatchError = computed(() => {
+  if (!canChooseCloneSource.value || !selectedCloneOption.value || !nodeId.value) return ''
+  if (selectedCloneOption.value.nodeId === nodeId.value) return ''
+  return 'Clone source must be on the same node as the new agent.'
+})
 const submitDisabled = computed(() => {
   if (creating.value) return true
   if (!name.value.trim()) return true
-  if (canChooseCloneSource.value && !cloneFrom.value) return true
+  if (!nodeId.value.trim()) return true
+  if (canChooseCloneSource.value && !cloneFromAgentId.value) return true
+  if (Boolean(nodeMismatchError.value)) return true
   return false
 })
 
+watch(
+  nodes,
+  (items) => {
+    if (items.length === 1) {
+      nodeId.value = items[0]?.id ?? ''
+      return
+    }
+    if (nodeId.value && items.some((item) => item.id === nodeId.value)) return
+    nodeId.value = ''
+  },
+  { immediate: true },
+)
+
 watch(canChooseCloneSource, (enabled) => {
-  if (!enabled) cloneFrom.value = ''
+  if (!enabled) cloneFromAgentId.value = ''
 })
 
-watch(cloneOptions, (options) => {
-  if (!canChooseCloneSource.value) return
-  if (cloneFrom.value && options.includes(cloneFrom.value)) return
-  cloneFrom.value = options[0] ?? ''
+watch([cloneOptions, nodeId, canChooseCloneSource], ([options, nextNodeId, enabled]) => {
+  if (!enabled) return
+  if (cloneFromAgentId.value && options.some((option) => option.id === cloneFromAgentId.value && (!nextNodeId || option.nodeId === nextNodeId))) {
+    return
+  }
+  const preferred = nextNodeId ? options.find((option) => option.nodeId === nextNodeId) : undefined
+  cloneFromAgentId.value = preferred?.id ?? options[0]?.id ?? ''
 })
 
 async function createAgent(): Promise<void> {
   if (submitDisabled.value) return
   creating.value = true
   createError.value = null
-  createdSteps.value = []
   createdProfileId.value = null
 
   const payload = {
     name: name.value.trim(),
+    nodeId: nodeId.value.trim(),
     cloneMode: cloneMode.value,
-    cloneFrom: canChooseCloneSource.value ? cloneFrom.value : undefined,
+    cloneFrom: canChooseCloneSource.value ? cloneFromAgentId.value : undefined,
     noAlias: !createAlias.value,
   } as const
 
@@ -61,10 +98,18 @@ async function createAgent(): Promise<void> {
       createError.value = result.error ?? 'Failed to create agent'
       return
     }
-    createdSteps.value = result.steps ?? []
-    const created = profiles.value.find((p) => p.name === payload.name)
-    createdProfileId.value = created?.id ?? null
-    hubStore.showToast('Create queued', `${payload.name} will appear after Hub Agent completes the command.`)
+    const created = profiles.value.find((profile) => profile.name === payload.name && profile.nodeId === payload.nodeId)
+    createdProfileId.value = result.agentId ?? created?.id ?? null
+    if (!createdProfileId.value) {
+      createError.value = 'Create succeeded, but could not resolve the new agent ID.'
+      return
+    }
+    hubStore.showToast('Create success', `${payload.name} created. Continue with setup.`)
+    void router.push({
+      name: 'profileSetup',
+      params: { id: createdProfileId.value },
+      query: { mode: 'create_flow' },
+    })
   } finally {
     creating.value = false
   }
@@ -90,7 +135,7 @@ onMounted(() => {
         </button>
       </template>
       <template #title>Create Hermes Agent</template>
-      <template #subtitle>Queue a profile.create command for the selected Hub Agent worker.</template>
+      <template #subtitle>Create the profile first, then continue in the dedicated setup form.</template>
       <template #actions>
         <UiButton :disabled="submitDisabled" variant="primary" @click="createAgent">
           {{ creating ? 'Creating...' : 'Create Agent' }}
@@ -108,6 +153,18 @@ onMounted(() => {
           </label>
 
           <label class="form-group">
+            <span>Node</span>
+            <select v-model="nodeId" :disabled="nodes.length <= 1">
+              <option value="" :disabled="hasMultipleNodes">Select a node</option>
+              <option v-for="node in nodes" :key="node.id" :value="node.id">
+                {{ node.name }} ({{ node.id }})
+              </option>
+            </select>
+            <small v-if="nodes.length === 1">Single node detected. Auto-selected.</small>
+            <small v-else-if="hasMultipleNodes">Choose the node that should host the new agent.</small>
+          </label>
+
+          <label class="form-group">
             <span>Create Mode</span>
             <select v-model="cloneMode">
               <option value="blank">Blank</option>
@@ -118,10 +175,11 @@ onMounted(() => {
 
           <label class="form-group" :class="!canChooseCloneSource ? 'opacity-60' : ''">
             <span>Clone From</span>
-            <select v-model="cloneFrom" :disabled="!canChooseCloneSource || isLoadingProfiles">
-              <option v-if="cloneOptions.length === 0" value="">No profile available</option>
-              <option v-for="option in cloneOptions" :key="option" :value="option">{{ option }}</option>
+            <select v-model="cloneFromAgentId" :disabled="!canChooseCloneSource || isLoadingProfiles">
+              <option v-if="cloneOptions.length === 0" value="">No agent available</option>
+              <option v-for="option in cloneOptions" :key="option.id" :value="option.id">{{ option.label }}</option>
             </select>
+            <small>Choose the exact agent instance to clone from, including default agents.</small>
           </label>
 
           <label class="form-group">
@@ -133,11 +191,15 @@ onMounted(() => {
           </label>
         </div>
 
+        <div v-if="nodeMismatchError" class="mt-4 rounded-md border border-warning/30 bg-warning/8 px-4 py-3 text-sm text-warning">
+          {{ nodeMismatchError }}
+        </div>
+
         <div class="mt-4 flex flex-wrap items-center gap-2">
           <UiButton :disabled="submitDisabled" variant="primary" @click="createAgent">{{ creating ? 'Creating...' : 'Create Agent' }}</UiButton>
           <UiButton :disabled="!createdProfileId" @click="goToCreatedAgent">Open Agent Detail</UiButton>
           <span v-if="createError" class="text-sm text-danger">{{ createError }}</span>
-          <span v-if="!createError && createdSteps.length > 0" class="text-sm text-mint">Command queued.</span>
+          <span v-if="!createError && createdProfileId" class="text-sm text-mint">Profile created.</span>
         </div>
       </section>
 
@@ -145,16 +207,12 @@ onMounted(() => {
         <div class="note-card">
           <h4>CLI mapping</h4>
           <CommandBox>hermes profile create &lt;name&gt;</CommandBox>
-          <p class="mt-2">Clone mode and alias options are translated to official Hermes CLI flags.</p>
+          <p class="mt-2">Node selection targets the exact Hub Agent that will run this create command.</p>
         </div>
         <div class="note-card">
-          <h4>Recommended setup</h4>
-          <CommandBox>hermes -p &lt;name&gt; setup</CommandBox>
-          <p class="mt-2">After the create command succeeds, run setup with the same profile.</p>
-        </div>
-        <div v-if="createdSteps.length > 0" class="note-card">
-          <h4>Next commands</h4>
-          <CommandBox>{{ createdSteps.join('\n') }}</CommandBox>
+          <h4>Next step</h4>
+          <CommandBox>profile.create -&gt; profile.setup</CommandBox>
+          <p class="mt-2">After create succeeds, Hermes Hub will move into the setup form instead of jumping straight into execution.</p>
         </div>
       </aside>
     </div>
